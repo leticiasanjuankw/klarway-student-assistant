@@ -41,19 +41,16 @@ app.post("/api/chat", async (req, res) => {
     const { message, history = [] } = req.body;
 
     const response = await openai.responses.create({
-      model: "gpt-4.1-mini",
-      input: [
-        {
-          role: "system",
-          content: SYSTEM_PROMPT
-        },
-        ...history,
-        {
-          role: "user",
-          content: message
-        }
-      ]
-    });
+  model: "gpt-4.1-mini",
+  instructions: SYSTEM_PROMPT,
+  input: [
+    ...history,
+    {
+      role: "user",
+      content: message
+    }
+  ]
+});	
 
     res.json({
       reply: response.output_text
