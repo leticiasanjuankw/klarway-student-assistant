@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import OpenAI from "openai";
-import { INSTITUTIONS, getInstitutionContext, searchInstitutions } from "./institutions.js";
+import { INSTITUTIONS, getInstitutionContext } from "./institutions.js";
 
 dotenv.config();
 
@@ -61,8 +61,6 @@ function isAffirmative(message) {
     "ok",
     "correcto",
     "correcta",
-    "es correcto",
-    "es correcta",
     "confirmo",
     "confirmada",
     "confirmado",
@@ -76,7 +74,6 @@ function isNegative(message) {
     "no",
     "ninguna",
     "ninguno",
-    "no es",
     "incorrecto",
     "incorrecta",
   ].includes(normalized);
@@ -192,6 +189,12 @@ function confirmInstitution(session, institution) {
   session.pendingInstitutionName = null;
   session.pendingProduct = null;
   session.pendingLms = null;
+}
+
+function getSystemTypeLabel(product) {
+  if (product === "App") return "la aplicación de Klarway";
+  if (product === "Extension") return "la extensión de Chrome";
+  return "Klarway";
 }
 
 function getSupportTextForInstitution(session) {
@@ -420,11 +423,12 @@ app.post("/api/chat", async (req, res) => {
         confirmInstitution(session, confirmed);
 
         return res.json({
-          reply: `Perfecto, confirmé tu institución: ${confirmed.name}. Usás ${
-            confirmed.product === "App"
-              ? "la aplicación de Klarway"
-              : "la extensión de Chrome"
-          }. ¿En qué puedo ayudarte?`,
+          reply: `Perfecto, confirmé tu institución: ${confirmed.name}. Usás ${getSystemTypeLabel(
+            confirmed.product
+          )}. ¿En qué puedo ayudarte?`,
+          flowStep: "institution_confirmed",
+          needsInstitutionConfirmation: false,
+          canContinueToProblem: true,
           session,
         });
       }
@@ -437,11 +441,12 @@ app.post("/api/chat", async (req, res) => {
         confirmInstitution(session, confirmed);
 
         return res.json({
-          reply: `Perfecto, confirmé tu institución: ${confirmed.name}. Usás ${
-            confirmed.product === "App"
-              ? "la aplicación de Klarway"
-              : "la extensión de Chrome"
-          }. ¿En qué puedo ayudarte?`,
+          reply: `Perfecto, confirmé tu institución: ${confirmed.name}. Usás ${getSystemTypeLabel(
+            confirmed.product
+          )}. ¿En qué puedo ayudarte?`,
+          flowStep: "institution_confirmed",
+          needsInstitutionConfirmation: false,
+          canContinueToProblem: true,
           session,
         });
       }
@@ -456,6 +461,10 @@ app.post("/api/chat", async (req, res) => {
       return res.json({
         reply:
           "Entendido. Por favor, escribí el nombre completo de tu institución.",
+        flowStep: "institution_not_confirmed",
+        needsInstitutionConfirmation: true,
+        canContinueToProblem: false,
+        matches: [],
         session,
       });
     }
@@ -478,7 +487,9 @@ app.post("/api/chat", async (req, res) => {
 
         return res.json({
           reply: `Encontré una posible coincidencia: ${match.name}. ¿Tu institución es esa?`,
+          flowStep: "confirm_institution",
           needsInstitutionConfirmation: true,
+          canContinueToProblem: false,
           matches: institutionResult.matches,
           session,
         });
@@ -491,7 +502,9 @@ app.post("/api/chat", async (req, res) => {
         return res.json({
           reply:
             "Encontré más de una posible coincidencia. ¿Cuál de estas es tu institución?",
+          flowStep: "choose_institution",
           needsInstitutionConfirmation: true,
+          canContinueToProblem: false,
           matches: institutionResult.matches,
           session,
         });
@@ -500,7 +513,9 @@ app.post("/api/chat", async (req, res) => {
       return res.json({
         reply:
           "No pude identificar tu institución. ¿Podés escribir el nombre completo?",
+        flowStep: "institution_not_found",
         needsInstitutionConfirmation: true,
+        canContinueToProblem: false,
         matches: [],
         session,
       });
@@ -515,6 +530,9 @@ app.post("/api/chat", async (req, res) => {
       return res.json({
         reply:
           "Para poder ayudarte, primero necesito estos datos:\n\n1. Nombre y apellido\n2. Mail personal o institucional\n3. Institución donde tenés que rendir el examen",
+        flowStep: "collect_student_data",
+        needsInstitutionConfirmation: false,
+        canContinueToProblem: false,
         session,
       });
     }
@@ -562,6 +580,9 @@ ${message}
 
     res.json({
       reply: response.output_text,
+      flowStep: "answer_problem",
+      needsInstitutionConfirmation: false,
+      canContinueToProblem: true,
       session,
     });
   } catch (err) {
