@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import OpenAI from "openai";
-import { INSTITUTIONS, getInstitutionContext } from "./institutions.js";
+import { INSTITUTIONS, getInstitutionContext, searchInstitutions } from "./institutions.js";
 
 dotenv.config();
 
@@ -31,6 +31,10 @@ function getSession(sessionId) {
       institutionName: null,
       product: null,
       lms: null,
+      pendingInstitutionId: null,
+      pendingInstitutionName: null,
+      pendingProduct: null,
+      pendingLms: null,
       attempts: 0,
     });
   }
@@ -38,14 +42,174 @@ function getSession(sessionId) {
   return sessions.get(id);
 }
 
-function getInstitutionListForAI() {
-  return INSTITUTIONS.map((institution) => {
-    return `- ID: ${institution.id} | Nombre: ${institution.name} | Producto: ${institution.product} | LMS: ${institution.lms}`;
-  }).join("\n");
+function normalizeText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/g, "")
+    .trim();
 }
 
-function getInstitutionById(institutionId) {
-  return INSTITUTIONS.find((i) => i.id === institutionId) || null;
+function isAffirmative(message) {
+  const normalized = normalizeText(message);
+
+  return [
+    "si",
+    "sí",
+    "yes",
+    "ok",
+    "correcto",
+    "correcta",
+    "es correcto",
+    "es correcta",
+    "confirmo",
+    "confirmada",
+    "confirmado",
+  ].includes(normalized);
+}
+
+function isNegative(message) {
+  const normalized = normalizeText(message);
+
+  return [
+    "no",
+    "ninguna",
+    "ninguno",
+    "no es",
+    "incorrecto",
+    "incorrecta",
+  ].includes(normalized);
+}
+
+function findInstitutionById(id) {
+  return INSTITUTIONS.find((institution) => institution.id === id) || null;
+}
+
+function findInstitutionCandidates(institutionName) {
+  if (!institutionName) return [];
+
+  const normalizedInput = normalizeText(institutionName);
+
+  return INSTITUTIONS.filter((institution) => {
+    const normalizedName = normalizeText(institution.name);
+
+    return (
+      normalizedName === normalizedInput ||
+      normalizedName.includes(normalizedInput) ||
+      normalizedInput.includes(normalizedName)
+    );
+  });
+}
+
+async function findInstitutionWithAI(institutionName) {
+  if (!institutionName) {
+    return {
+      status: "missing",
+      matches: [],
+    };
+  }
+
+  const deterministicMatches = findInstitutionCandidates(institutionName);
+
+  if (deterministicMatches.length > 0) {
+    return {
+      status:
+        deterministicMatches.length === 1
+          ? "probable_match"
+          : "multiple_matches",
+      matches: deterministicMatches.slice(0, 3),
+    };
+  }
+
+  const institutionList = INSTITUTIONS.map(
+    (institution) =>
+      `ID: ${institution.id} | Nombre: ${institution.name} | Producto: ${institution.product} | LMS: ${institution.lms}`
+  ).join("\n");
+
+  const response = await openai.responses.create({
+    model: "gpt-4o-mini",
+    instructions: `
+Compará el nombre de institución escrito por el estudiante con la lista disponible.
+
+Devolvé SOLO JSON válido.
+No expliques.
+No uses markdown.
+No inventes instituciones.
+
+Reglas:
+- Si hay una coincidencia probable, devolvé status "probable_match".
+- Si hay varias posibles, devolvé status "multiple_matches".
+- Si no hay coincidencia clara, devolvé status "not_found".
+- Máximo 3 matches.
+- No confirmes automáticamente.
+`,
+    input: `
+Institución escrita por el estudiante:
+${institutionName}
+
+Lista de instituciones disponibles:
+${institutionList}
+
+Formato exacto:
+{
+  "status": "probable_match" | "multiple_matches" | "not_found",
+  "matches": [
+    {
+      "id": "string",
+      "name": "string",
+      "product": "string",
+      "lms": "string"
+    }
+  ]
+}
+`,
+    temperature: 0,
+    max_output_tokens: 400,
+  });
+
+  try {
+    const parsed = JSON.parse(response.output_text);
+
+    return {
+      status: parsed.status || "not_found",
+      matches: Array.isArray(parsed.matches) ? parsed.matches.slice(0, 3) : [],
+    };
+  } catch (error) {
+    return {
+      status: "not_found",
+      matches: [],
+    };
+  }
+}
+
+function confirmInstitution(session, institution) {
+  session.institutionId = institution.id;
+  session.institutionName = institution.name;
+  session.product = institution.product;
+  session.lms = institution.lms;
+  session.pendingInstitutionId = null;
+  session.pendingInstitutionName = null;
+  session.pendingProduct = null;
+  session.pendingLms = null;
+}
+
+function getSupportTextForInstitution(session) {
+  const institution = findInstitutionById(session.institutionId);
+
+  if (!institution) {
+    return "No tengo datos de contacto específicos para tu institución.";
+  }
+
+  const phone = institution.supportPhone || "No disponible";
+  const email = institution.supportEmail || "No disponible";
+
+  return `
+Datos de contacto de tu institución:
+- Institución: ${institution.name}
+- Teléfono de soporte: ${phone}
+- Mail de soporte: ${email}
+`;
 }
 
 const SYSTEM_PROMPT = `
@@ -63,28 +227,24 @@ IDIOMA:
 
 MEMORIA DE SESIÓN:
 - Usá siempre DATOS GUARDADOS DE LA SESIÓN.
-- Si ya hay nombre, mail e institución en sesión, NO vuelvas a pedirlos.
+- Si ya hay nombre, mail e institución confirmada, NO vuelvas a pedirlos.
 - Si Producto Klarway es "App", asumí que usa la aplicación de Klarway.
 - Si Producto Klarway es "Extension", asumí que usa la extensión de Chrome.
-- No vuelvas a pedir institución si ya está guardada.
-- Solo pedí confirmación si la institución fue inferida por aproximación o si hay varias opciones posibles.
-
-DETECCIÓN INTELIGENTE DE INSTITUCIÓN:
-- Compará la institución escrita por el estudiante contra LISTA DE INSTITUCIONES DISPONIBLES.
-- Podés detectar errores de tipeo, abreviaturas o formas alternativas.
-- Ejemplo: "Sigloxxi", "Siglo XXI" o "UES21" pueden corresponder a "Siglo 21".
-- Si encontrás una coincidencia probable, preguntá confirmación antes de diagnosticar.
-- Si hay más de una posibilidad, mostrá máximo 3 opciones y pedí que elija.
-- Si no hay coincidencia clara, pedí que escriba el nombre completo de la institución.
-- Si la institución ya está confirmada y el producto está definido, no preguntes App o Extensión.
+- No vuelvas a pedir institución si ya está confirmada.
+- No vuelvas a pedir App o Extensión si Producto Klarway ya está definido.
 
 DATOS MÍNIMOS:
-Antes de diagnosticar, necesitás:
+Antes de diagnosticar necesitás:
 1. Nombre y apellido
 2. Mail personal o institucional
-3. Institución
+3. Institución confirmada
 
 Pero si esos datos ya están en sesión, NO los vuelvas a pedir.
+
+INSTITUCIÓN:
+- Si el backend dice que la institución está confirmada, usala.
+- Si el backend dice que hay institución pendiente, esperá confirmación del estudiante.
+- Si Producto Klarway está definido, usalo para decidir App o Extensión.
 
 ESTILO:
 - Claro, simple y paciente.
@@ -127,7 +287,7 @@ REGLAS:
 - No pidas DNI.
 - No pidas datos sensibles.
 - No repitas pedidos de datos ya guardados.
-- Si el problema persiste después de varios intentos, derivá.
+- Si el problema persiste después de varios intentos, derivá y mostrale los datos de contacto de la institución si están disponibles.
 `;
 
 function getBasicKlarwayContext(message) {
@@ -237,7 +397,6 @@ app.post("/api/chat", async (req, res) => {
       sessionId,
       fullName,
       email,
-      institutionId,
       institutionName,
       confirmedInstitutionId,
       history = [],
@@ -253,25 +412,116 @@ app.post("/api/chat", async (req, res) => {
 
     if (fullName) session.fullName = fullName;
     if (email) session.email = email;
-    if (institutionName) session.institutionName = institutionName;
 
-    if (confirmedInstitutionId || institutionId) {
-      const selectedInstitution =
-        getInstitutionById(confirmedInstitutionId || institutionId);
+    if (confirmedInstitutionId) {
+      const confirmed = findInstitutionById(confirmedInstitutionId);
 
-      if (selectedInstitution) {
-        session.institutionId = selectedInstitution.id;
-        session.institutionName = selectedInstitution.name;
-        session.product = selectedInstitution.product;
-        session.lms = selectedInstitution.lms;
+      if (confirmed) {
+        confirmInstitution(session, confirmed);
+
+        return res.json({
+          reply: `Perfecto, confirmé tu institución: ${confirmed.name}. Usás ${
+            confirmed.product === "App"
+              ? "la aplicación de Klarway"
+              : "la extensión de Chrome"
+          }. ¿En qué puedo ayudarte?`,
+          session,
+        });
       }
     }
 
-    const institutionContext = session.institutionId
-      ? getInstitutionContext(session.institutionId)
-      : "Institución no confirmada todavía.";
+    if (session.pendingInstitutionId && isAffirmative(message)) {
+      const confirmed = findInstitutionById(session.pendingInstitutionId);
 
+      if (confirmed) {
+        confirmInstitution(session, confirmed);
+
+        return res.json({
+          reply: `Perfecto, confirmé tu institución: ${confirmed.name}. Usás ${
+            confirmed.product === "App"
+              ? "la aplicación de Klarway"
+              : "la extensión de Chrome"
+          }. ¿En qué puedo ayudarte?`,
+          session,
+        });
+      }
+    }
+
+    if (session.pendingInstitutionId && isNegative(message)) {
+      session.pendingInstitutionId = null;
+      session.pendingInstitutionName = null;
+      session.pendingProduct = null;
+      session.pendingLms = null;
+
+      return res.json({
+        reply:
+          "Entendido. Por favor, escribí el nombre completo de tu institución.",
+        session,
+      });
+    }
+
+    if (!session.institutionId && institutionName) {
+      session.institutionName = institutionName;
+
+      const institutionResult = await findInstitutionWithAI(institutionName);
+
+      if (
+        institutionResult.status === "probable_match" &&
+        institutionResult.matches.length === 1
+      ) {
+        const match = institutionResult.matches[0];
+
+        session.pendingInstitutionId = match.id;
+        session.pendingInstitutionName = match.name;
+        session.pendingProduct = match.product;
+        session.pendingLms = match.lms;
+
+        return res.json({
+          reply: `Encontré una posible coincidencia: ${match.name}. ¿Tu institución es esa?`,
+          needsInstitutionConfirmation: true,
+          matches: institutionResult.matches,
+          session,
+        });
+      }
+
+      if (
+        institutionResult.status === "multiple_matches" &&
+        institutionResult.matches.length > 0
+      ) {
+        return res.json({
+          reply:
+            "Encontré más de una posible coincidencia. ¿Cuál de estas es tu institución?",
+          needsInstitutionConfirmation: true,
+          matches: institutionResult.matches,
+          session,
+        });
+      }
+
+      return res.json({
+        reply:
+          "No pude identificar tu institución. ¿Podés escribir el nombre completo?",
+        needsInstitutionConfirmation: true,
+        matches: [],
+        session,
+      });
+    }
+
+    const hasMinimumData =
+      Boolean(session.fullName) &&
+      Boolean(session.email) &&
+      Boolean(session.institutionId);
+
+    if (!hasMinimumData) {
+      return res.json({
+        reply:
+          "Para poder ayudarte, primero necesito estos datos:\n\n1. Nombre y apellido\n2. Mail personal o institucional\n3. Institución donde tenés que rendir el examen",
+        session,
+      });
+    }
+
+    const institutionContext = getInstitutionContext(session.institutionId);
     const klarwayContext = getBasicKlarwayContext(message);
+    const supportText = getSupportTextForInstitution(session);
 
     session.attempts += 1;
 
@@ -287,24 +537,19 @@ DOCUMENTACIÓN OFICIAL DE KLARWAY:
 ${klarwayContext}
 
 DATOS GUARDADOS DE LA SESIÓN:
-Nombre y apellido: ${session.fullName || "No disponible"}
-Mail: ${session.email || "No disponible"}
-Institución escrita o guardada: ${session.institutionName || "No disponible"}
-Institución confirmada ID: ${session.institutionId || "No disponible"}
-Producto Klarway: ${session.product || "No disponible"}
-LMS: ${session.lms || "No disponible"}
+Nombre y apellido: ${session.fullName}
+Mail: ${session.email}
+Institución confirmada: ${session.institutionName}
+Institución confirmada ID: ${session.institutionId}
+Producto Klarway: ${session.product}
+LMS: ${session.lms}
 Intentos de solución: ${session.attempts}
 
 INSTITUCIÓN CONFIRMADA:
 ${institutionContext}
 
-LISTA DE INSTITUCIONES DISPONIBLES:
-${getInstitutionListForAI()}
-
-INSTRUCCIÓN IMPORTANTE:
-Si la institución escrita parece coincidir con una de la lista, pedí confirmación antes de diagnosticar.
-Si ya hay Institución confirmada ID y Producto Klarway, no vuelvas a pedir institución ni App/Extensión.
-Si ya hay nombre y mail en sesión, no los vuelvas a pedir.
+CONTACTO DE LA INSTITUCIÓN:
+${supportText}
 
 MENSAJE DEL ESTUDIANTE:
 ${message}
@@ -317,15 +562,7 @@ ${message}
 
     res.json({
       reply: response.output_text,
-      session: {
-        fullName: session.fullName,
-        email: session.email,
-        institutionId: session.institutionId,
-        institutionName: session.institutionName,
-        product: session.product,
-        lms: session.lms,
-        attempts: session.attempts,
-      },
+      session,
     });
   } catch (err) {
     console.error(err);
