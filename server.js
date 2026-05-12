@@ -21,6 +21,26 @@ const openai = new OpenAI({
 const KLARWAY_HELP_URL =
   "https://ayuda.klarway.com/pagina-de-ayuda-de-klarway/";
 
+const sessions = new Map();
+
+function getSession(sessionId) {
+  if (!sessionId) return {};
+
+  if (!sessions.has(sessionId)) {
+    sessions.set(sessionId, {
+      fullName: null,
+      email: null,
+      institutionId: null,
+      institutionName: null,
+      product: null,
+      lms: null,
+      attempts: 0,
+    });
+  }
+
+  return sessions.get(sessionId);
+}
+
 const SYSTEM_PROMPT = `
 Sos Klaris, el asistente virtual de soporte técnico de Klarway.
 
@@ -37,6 +57,15 @@ IDIOMA:
 - Si el estudiante escribe en español, respondé en español.
 - Si el estudiante escribe en inglés, respondé en inglés.
 - Mantené siempre un lenguaje simple.
+
+MEMORIA DE SESIÓN:
+- Usá siempre los datos guardados de la sesión.
+- Si nombre, mail o institución aparecen en DATOS GUARDADOS DE LA SESIÓN, no los vuelvas a pedir.
+- Si Producto Klarway es "App", asumí que usa la aplicación de Klarway.
+- Si Producto Klarway es "Extension", asumí que usa la extensión de Chrome.
+- Si la institución ya está confirmada por backend, no vuelvas a pedir institución.
+- Solo preguntá App o Extensión si el producto no está definido o hay múltiples coincidencias.
+- Si el problema persiste y hay datos de contacto de la institución, indicá esos datos al estudiante.
 
 PRIMER PASO OBLIGATORIO: DATOS DEL ESTUDIANTE
 Antes de diagnosticar cualquier problema técnico, necesitás contar con estos datos:
@@ -312,12 +341,15 @@ function detectInstitution(institutionText) {
 
 app.post("/api/chat", async (req, res) => {
   try {
-    const {
-      message,
-      institutionId,
-      institutionName,
-      history = [],
-    } = req.body;
+const {
+  message,
+  sessionId,
+  fullName,
+  email,
+  institutionId,
+  institutionName,
+  history = [],
+} = req.body; 
 
     if (!message) {
       return res.status(400).json({
@@ -325,19 +357,42 @@ app.post("/api/chat", async (req, res) => {
       });
     }
 
-    const institutionDetection = detectInstitution(institutionName);
+const session = getSession(sessionId);
 
-	let finalInstitutionId = institutionId;
+if (fullName) session.fullName = fullName;
+if (email) session.email = email;
+if (institutionId) session.institutionId = institutionId;
+if (institutionName) session.institutionName = institutionName;
+
+const institutionDetection = detectInstitution(
+  institutionName || session.institutionName
+);
+
+let finalInstitutionId =
+  institutionId || session.institutionId;
 
 	if (!finalInstitutionId && institutionDetection.selectedInstitution) {
   	finalInstitutionId =
     	institutionDetection.selectedInstitution.id;
 	}
 
+if (finalInstitutionId) {
+  session.institutionId = finalInstitutionId;
+}
+
+if (institutionDetection.selectedInstitution) {
+  session.institutionName =
+    institutionDetection.selectedInstitution.name;
+  session.product =
+    institutionDetection.selectedInstitution.product;
+  session.lms =
+    institutionDetection.selectedInstitution.lms;
+}
+
 	const institutionContext =
   	getInstitutionContext(finalInstitutionId);
     	const klarwayContext = getBasicKlarwayContext(message);
-
+	session.attempts += 1;
     	const response = await openai.responses.create({
       	model: "gpt-4o-mini",
       	instructions: SYSTEM_PROMPT,
@@ -347,6 +402,7 @@ app.post("/api/chat", async (req, res) => {
 {
   role: "user",
   content: `
+
 DOCUMENTACIÓN OFICIAL DE KLARWAY:
 ${klarwayContext}
 
@@ -368,6 +424,14 @@ ${
 
 INSTITUCIÓN CONFIRMADA:
 ${institutionContext}
+
+DATOS GUARDADOS DE LA SESIÓN:
+Nombre y apellido: ${session.fullName || "No disponible"}
+Mail: ${session.email || "No disponible"}
+Institución: ${session.institutionName || "No disponible"}
+Producto Klarway: ${session.product || "No disponible"}
+LMS: ${session.lms || "No disponible"}
+Intentos de solución: ${session.attempts}
 
 MENSAJE DEL ESTUDIANTE:
 ${message}
