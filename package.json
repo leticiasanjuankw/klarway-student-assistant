@@ -1,5 +1,5 @@
 {
-  "name": "klarway-agent",
+  "name": "klarway-student-assistant",
   "version": "1.0.0",
   "type": "module",
   "main": "server.js",
