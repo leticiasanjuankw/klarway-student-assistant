@@ -2,11 +2,8 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import OpenAI from "openai";
-import {
-  INSTITUTIONS,
-  getInstitutionContext,
-  searchInstitutions,
-} from "./institutions.js";
+import { INSTITUTIONS, getInstitutionContext } from "./institutions.js";
+
 dotenv.config();
 
 const app = express();
@@ -24,10 +21,10 @@ const KLARWAY_HELP_URL =
 const sessions = new Map();
 
 function getSession(sessionId) {
-  if (!sessionId) return {};
+  const id = sessionId || "default-session";
 
-  if (!sessions.has(sessionId)) {
-    sessions.set(sessionId, {
+  if (!sessions.has(id)) {
+    sessions.set(id, {
       fullName: null,
       email: null,
       institutionId: null,
@@ -38,90 +35,64 @@ function getSession(sessionId) {
     });
   }
 
-  return sessions.get(sessionId);
+  return sessions.get(id);
+}
+
+function getInstitutionListForAI() {
+  return INSTITUTIONS.map((institution) => {
+    return `- ID: ${institution.id} | Nombre: ${institution.name} | Producto: ${institution.product} | LMS: ${institution.lms}`;
+  }).join("\n");
+}
+
+function getInstitutionById(institutionId) {
+  return INSTITUTIONS.find((i) => i.id === institutionId) || null;
 }
 
 const SYSTEM_PROMPT = `
 Sos Klaris, el asistente virtual de soporte técnico de Klarway.
 
 IDENTIDAD:
-- Cuando el estudiante pregunte tu nombre o quién sos, respondé que sos Klaris.
+- Sos Klaris.
 - Nunca digas que sos ChatGPT.
 - Nunca digas que sos un modelo de OpenAI.
 - Representás al soporte técnico de Klarway.
 
-USUARIO:
-Tu usuario principal es un estudiante de entre 18 y 60 años, con bajo nivel técnico.
-
 IDIOMA:
-- Si el estudiante escribe en español, respondé en español.
-- Si el estudiante escribe en inglés, respondé en inglés.
-- Mantené siempre un lenguaje simple.
+- Respondé en español o inglés según el idioma del estudiante.
+- Usá lenguaje simple.
 
 MEMORIA DE SESIÓN:
-- Usá siempre los datos guardados de la sesión.
-- Si nombre, mail o institución aparecen en DATOS GUARDADOS DE LA SESIÓN, no los vuelvas a pedir.
+- Usá siempre DATOS GUARDADOS DE LA SESIÓN.
+- Si ya hay nombre, mail e institución en sesión, NO vuelvas a pedirlos.
 - Si Producto Klarway es "App", asumí que usa la aplicación de Klarway.
 - Si Producto Klarway es "Extension", asumí que usa la extensión de Chrome.
-- Si la institución ya está confirmada por backend, no vuelvas a pedir institución.
-- Solo preguntá App o Extensión si el producto no está definido o hay múltiples coincidencias.
-- Si el problema persiste y hay datos de contacto de la institución, indicá esos datos al estudiante.
+- No vuelvas a pedir institución si ya está guardada.
+- Solo pedí confirmación si la institución fue inferida por aproximación o si hay varias opciones posibles.
 
-PRIMER PASO OBLIGATORIO: DATOS DEL ESTUDIANTE
-Antes de diagnosticar cualquier problema técnico, necesitás contar con estos datos:
+DETECCIÓN INTELIGENTE DE INSTITUCIÓN:
+- Compará la institución escrita por el estudiante contra LISTA DE INSTITUCIONES DISPONIBLES.
+- Podés detectar errores de tipeo, abreviaturas o formas alternativas.
+- Ejemplo: "Sigloxxi", "Siglo XXI" o "UES21" pueden corresponder a "Siglo 21".
+- Si encontrás una coincidencia probable, preguntá confirmación antes de diagnosticar.
+- Si hay más de una posibilidad, mostrá máximo 3 opciones y pedí que elija.
+- Si no hay coincidencia clara, pedí que escriba el nombre completo de la institución.
+- Si la institución ya está confirmada y el producto está definido, no preguntes App o Extensión.
 
+DATOS MÍNIMOS:
+Antes de diagnosticar, necesitás:
 1. Nombre y apellido
 2. Mail personal o institucional
-3. Institución donde tiene que rendir el examen
+3. Institución
 
-Si alguno de estos datos falta, pedilo antes de avanzar con el diagnóstico.
-
-Pedilos de forma simple y amable.
-
-Ejemplo:
-"Para poder ayudarte, primero necesito estos datos:
-1. Nombre y apellido
-2. Mail personal o institucional
-3. Institución donde tenés que rendir el examen"
-
-No pidas DNI, contraseña, número de documento, código de examen ni datos sensibles.
-
-INSTITUCIÓN:
-La institución es obligatoria porque permite identificar qué sistema usa el estudiante:
-- Aplicación de Klarway
-- Extensión de Klarway
-
-Usá el contexto de institución recibido desde el backend para confirmar la institución.
-
-Si la institución no está identificada:
-- Pedile al estudiante que la escriba nuevamente.
-- No adivines si no hay coincidencia razonable.
-
-Si encontrás una coincidencia aproximada:
-- Confirmala con el estudiante antes de diagnosticar.
-
-Ejemplo:
-"¿Tu institución es Siglo 21?"
-
-Si existen dos o más coincidencias para la misma institución o aparece más de una configuración:
-- Pedile al estudiante que confirme cuál usa para rendir.
-- Especialmente si hay una opción con App y otra con Extensión.
-
-Ejemplo:
-"Encontré más de una opción para tu institución. ¿Rendís usando la aplicación de Klarway o la extensión de Chrome?"
-
-No avances con instrucciones técnicas hasta tener confirmada la institución o hasta saber si usa App o Extensión cuando haya ambigüedad.
+Pero si esos datos ya están en sesión, NO los vuelvas a pedir.
 
 ESTILO:
-- Sé claro, simple y paciente.
-- Guiá paso a paso.
-- No uses jerga técnica innecesaria.
-- Hacé una pregunta por vez.
-- No des muchas soluciones juntas.
-- Presentate como Klaris solo si el usuario pregunta quién sos o cómo te llamás.
-- No repitas tu nombre innecesariamente.
+- Claro, simple y paciente.
+- Una pregunta por vez.
+- Máximo 3 a 5 pasos.
+- Una instrucción por paso.
+- No uses jerga técnica.
 - No culpes al estudiante.
-- No generes frustración.
 
 FUENTE OFICIAL:
 La documentación oficial es:
@@ -130,12 +101,8 @@ ${KLARWAY_HELP_URL}
 Usá solamente el contexto oficial incluido en el mensaje.
 No inventes soluciones.
 No inventes links.
-No digas que una solución está en la documentación si no aparece en el contexto oficial.
-Si no hay información suficiente, pedí un dato simple o derivá.
 
-CATEGORÍAS DE PROBLEMAS:
-Una vez que ya tenés los datos mínimos y la institución confirmada, clasificá internamente el problema como una de estas categorías:
-
+CATEGORÍAS:
 1. Instalación incorrecta o navegador incorrecto
 2. Permisos de cámara o micrófono
 3. Cámara en uso por otra aplicación
@@ -143,34 +110,11 @@ Una vez que ya tenés los datos mínimos y la institución confirmada, clasific�
 5. Iluminación
 6. Otro
 
-FLUJO OBLIGATORIO:
-1. Verificá si ya tenés nombre y apellido, mail e institución.
-2. Si falta algún dato, pedilo antes de diagnosticar.
-3. Confirmá la institución cuando haya coincidencia exacta o aproximada.
-4. Si la institución aparece con más de una configuración, preguntá si usa App o Extensión.
-5. Identificá el problema.
-6. Si falta información técnica, hacé una sola pregunta simple.
-7. Atacá primero la causa más común.
-8. Explicá en pasos numerados.
-9. Usá máximo 3 a 5 pasos.
-10. Indicá una sola acción por paso.
-11. Referenciá la documentación oficial si aplica.
-12. Terminá siempre con una pregunta.
-
-FORMATO OBLIGATORIO:
+FORMATO:
 - Explicación breve
-- Pasos numerados, máximo 3 a 5
-- Una instrucción por paso
-- Referencia a documentación oficial si aplica
+- Pasos numerados
+- Referencia oficial si aplica
 - Pregunta final
-
-PREGUNTAS FINALES VÁLIDAS:
-- ¿Te funcionó esto?
-- ¿Qué mensaje te aparece ahora?
-- ¿Podés confirmarme en qué navegador estás?
-- ¿Te aparece algún mensaje de error?
-- ¿Tu institución es esta?
-- ¿Rendís con la aplicación de Klarway o con la extensión de Chrome?
 
 FALLBACK ES:
 En este caso, te recomiendo contactar directamente con tu institución para que puedan ayudarte con tu situación específica. Voy a derivar tu caso.
@@ -178,30 +122,12 @@ En este caso, te recomiendo contactar directamente con tu institución para que 
 FALLBACK EN:
 In this case, I recommend contacting your institution so they can assist you with your specific situation. I will escalate your case.
 
-REGLAS CRÍTICAS:
-- Nunca pidas contraseñas.
-- Nunca pidas DNI, número de documento ni datos sensibles.
-- No pidas capturas con datos privados.
-- No inventes soluciones.
-- No inventes links.
-- No recomiendes soluciones fuera de la documentación oficial.
-- No des muchas soluciones juntas.
-- No uses lenguaje técnico innecesario.
+REGLAS:
+- No pidas contraseñas.
+- No pidas DNI.
+- No pidas datos sensibles.
+- No repitas pedidos de datos ya guardados.
 - Si el problema persiste después de varios intentos, derivá.
-- Si no podés confirmar la institución, pedí aclaración.
-- Si no sabés si corresponde App o Extensión, preguntá antes de dar pasos.
-
-AUTO-CHECK INTERNO ANTES DE RESPONDER:
-Antes de responder, verificá:
-1. ¿Tengo nombre y apellido?
-2. ¿Tengo mail?
-3. ¿Tengo institución?
-4. ¿La institución está confirmada?
-5. ¿Sé si usa App o Extensión cuando corresponde?
-6. ¿La solución está respaldada por el contexto oficial?
-7. ¿Estoy explicando simple?
-8. ¿Estoy haciendo una sola pregunta por vez?
-9. ¿Termino con una pregunta?
 `;
 
 function getBasicKlarwayContext(message) {
@@ -212,7 +138,7 @@ Fuente oficial:
 ${KLARWAY_HELP_URL}
 
 Contexto general:
-Klarway puede requerir navegador Google Chrome, permisos de cámara y micrófono, buena iluminación, ambiente silencioso y que la cámara no esté siendo usada por otra aplicación.
+Klarway puede requerir Google Chrome, permisos de cámara y micrófono, buena iluminación, ambiente silencioso y que la cámara no esté siendo usada por otra aplicación.
 `;
 
   if (
@@ -250,9 +176,9 @@ Tema probable:
 Instalación o navegador.
 
 Guía:
-- Verificar que el estudiante esté usando Google Chrome.
-- Verificar que la extensión esté instalada en Chrome.
-- No asumir que otros navegadores funcionan igual.
+- Verificar si corresponde extensión de Chrome o aplicación.
+- Si corresponde extensión, usar Google Chrome.
+- Verificar que la extensión esté instalada.
 `;
   }
 
@@ -268,7 +194,7 @@ Tema probable:
 Ruido ambiente.
 
 Guía:
-- Indicar al estudiante que busque un lugar silencioso.
+- Buscar un lugar silencioso.
 - Evitar hablar durante el examen.
 - Reducir ruidos externos.
 `;
@@ -287,7 +213,7 @@ Tema probable:
 Iluminación.
 
 Guía:
-- Pedir al estudiante que se ubique en un lugar bien iluminado.
+- Ubicarse en un lugar bien iluminado.
 - Evitar estar a contraluz.
 - Mantener el rostro visible.
 `;
@@ -304,52 +230,18 @@ app.get("/", (req, res) => {
   });
 });
 
-function detectInstitution(institutionText) {
-  if (!institutionText) {
-    return {
-      status: "missing",
-      message: "No se ingresó institución.",
-      matches: [],
-    };
-  }
-
-  const matches = searchInstitutions(institutionText);
-
-  if (matches.length === 0) {
-    return {
-      status: "not_found",
-      message: "No se encontró una institución coincidente.",
-      matches: [],
-    };
-  }
-
-  if (matches.length === 1) {
-    return {
-      status: "single_match",
-      message: "Se encontró una institución coincidente.",
-      matches,
-      selectedInstitution: matches[0],
-    };
-  }
-
-  return {
-    status: "multiple_matches",
-    message: "Se encontró más de una institución coincidente.",
-    matches,
-  };
-}
-
 app.post("/api/chat", async (req, res) => {
   try {
-const {
-  message,
-  sessionId,
-  fullName,
-  email,
-  institutionId,
-  institutionName,
-  history = [],
-} = req.body; 
+    const {
+      message,
+      sessionId,
+      fullName,
+      email,
+      institutionId,
+      institutionName,
+      confirmedInstitutionId,
+      history = [],
+    } = req.body;
 
     if (!message) {
       return res.status(400).json({
@@ -357,87 +249,67 @@ const {
       });
     }
 
-const session = getSession(sessionId);
+    const session = getSession(sessionId);
 
-if (fullName) session.fullName = fullName;
-if (email) session.email = email;
-if (institutionId) session.institutionId = institutionId;
-if (institutionName) session.institutionName = institutionName;
+    if (fullName) session.fullName = fullName;
+    if (email) session.email = email;
+    if (institutionName) session.institutionName = institutionName;
 
-const institutionDetection = detectInstitution(
-  institutionName || session.institutionName
-);
+    if (confirmedInstitutionId || institutionId) {
+      const selectedInstitution =
+        getInstitutionById(confirmedInstitutionId || institutionId);
 
-let finalInstitutionId =
-  institutionId || session.institutionId;
+      if (selectedInstitution) {
+        session.institutionId = selectedInstitution.id;
+        session.institutionName = selectedInstitution.name;
+        session.product = selectedInstitution.product;
+        session.lms = selectedInstitution.lms;
+      }
+    }
 
-	if (!finalInstitutionId && institutionDetection.selectedInstitution) {
-  	finalInstitutionId =
-    	institutionDetection.selectedInstitution.id;
-	}
+    const institutionContext = session.institutionId
+      ? getInstitutionContext(session.institutionId)
+      : "Institución no confirmada todavía.";
 
-if (finalInstitutionId) {
-  session.institutionId = finalInstitutionId;
-}
+    const klarwayContext = getBasicKlarwayContext(message);
 
-if (institutionDetection.selectedInstitution) {
-  session.institutionName =
-    institutionDetection.selectedInstitution.name;
-  session.product =
-    institutionDetection.selectedInstitution.product;
-  session.lms =
-    institutionDetection.selectedInstitution.lms;
-}
+    session.attempts += 1;
 
-	const institutionContext =
-  	getInstitutionContext(finalInstitutionId);
-    	const klarwayContext = getBasicKlarwayContext(message);
-	session.attempts += 1;
-    	const response = await openai.responses.create({
-      	model: "gpt-4o-mini",
-      	instructions: SYSTEM_PROMPT,
-      	input: [
+    const response = await openai.responses.create({
+      model: "gpt-4o-mini",
+      instructions: SYSTEM_PROMPT,
+      input: [
         ...history,
-
-{
-  role: "user",
-  content: `
-
+        {
+          role: "user",
+          content: `
 DOCUMENTACIÓN OFICIAL DE KLARWAY:
 ${klarwayContext}
-
-DETECCIÓN DE INSTITUCIÓN:
-Estado: ${institutionDetection.status}
-Mensaje: ${institutionDetection.message}
-
-COINCIDENCIAS ENCONTRADAS:
-${
-  institutionDetection.matches.length > 0
-    ? institutionDetection.matches
-        .map(
-          (institution) =>
-            `- ${institution.name} | Producto: ${institution.product} | LMS: ${institution.lms}`
-        )
-        .join("\n")
-    : "Sin coincidencias"
-}
-
-INSTITUCIÓN CONFIRMADA:
-${institutionContext}
 
 DATOS GUARDADOS DE LA SESIÓN:
 Nombre y apellido: ${session.fullName || "No disponible"}
 Mail: ${session.email || "No disponible"}
-Institución: ${session.institutionName || "No disponible"}
+Institución escrita o guardada: ${session.institutionName || "No disponible"}
+Institución confirmada ID: ${session.institutionId || "No disponible"}
 Producto Klarway: ${session.product || "No disponible"}
 LMS: ${session.lms || "No disponible"}
 Intentos de solución: ${session.attempts}
 
+INSTITUCIÓN CONFIRMADA:
+${institutionContext}
+
+LISTA DE INSTITUCIONES DISPONIBLES:
+${getInstitutionListForAI()}
+
+INSTRUCCIÓN IMPORTANTE:
+Si la institución escrita parece coincidir con una de la lista, pedí confirmación antes de diagnosticar.
+Si ya hay Institución confirmada ID y Producto Klarway, no vuelvas a pedir institución ni App/Extensión.
+Si ya hay nombre y mail en sesión, no los vuelvas a pedir.
+
 MENSAJE DEL ESTUDIANTE:
 ${message}
 `,
-},
-
+        },
       ],
       temperature: 0.2,
       max_output_tokens: 450,
@@ -445,6 +317,15 @@ ${message}
 
     res.json({
       reply: response.output_text,
+      session: {
+        fullName: session.fullName,
+        email: session.email,
+        institutionId: session.institutionId,
+        institutionName: session.institutionName,
+        product: session.product,
+        lms: session.lms,
+        attempts: session.attempts,
+      },
     });
   } catch (err) {
     console.error(err);
