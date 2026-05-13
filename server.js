@@ -18,6 +18,85 @@ const openai = new OpenAI({
 const KLARWAY_HELP_URL =
   "https://ayuda.klarway.com/pagina-de-ayuda-de-klarway/";
 
+const KLARWAY_KNOWLEDGE = `
+CENTRO DE AYUDA:
+Buscá la información que necesites para hacer tu examen con proctoring de manera segura y tranquilo.
+Guía completa por tipo de producto, sistema operativo y asistente IA.
+
+IMPORTANTE:
+Si no encontraste lo que buscabas, contactate con tu institución.
+
+REGLA PARA APP O EXTENSIÓN:
+El sistema que usa el estudiante se define por la institución confirmada y por su campo Producto:
+- Producto "App" = aplicación de Klarway.
+- Producto "Extension" = extensión de Chrome.
+No cambiar esta definición por lo que diga el estudiante. Si hay conflicto, aclarar usando la institución confirmada.
+
+REQUISITOS:
+Los requisitos son iguales para app y extensión.
+En extensión es necesario usar Google Chrome.
+https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/requisitos-2/
+
+EXTENSIÓN:
+Instalación:
+https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/instalacion/
+
+Registro:
+https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/registro/
+
+Realizar un examen:
+https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/realizar-un-examen-2/
+
+APP:
+Registro:
+https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/registro/
+
+Realizar un examen:
+https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/realizar-un-examen/
+
+APP MAC:
+Instalar Klarway:
+https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/ios-instalacion/
+
+Permisos de cámara, micrófono y grabación de pantalla:
+https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/ios-permiso-de-camara-microfono-y-grabacion-de-pantalla/
+
+Cerrar procesos abiertos:
+https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/permisos-ios-cerrar-procesos-abiertos/
+
+Desinstalar cámaras virtuales:
+https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/ios-desinstalar-camaras-virtuales/
+
+APP WINDOWS:
+Instalar Klarway:
+https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-instalacion/
+
+Permiso de cámara y micrófono:
+https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-permiso-de-camara-y-microfono/
+
+Cerrar procesos abiertos:
+https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/permisos-windows-cerrar-procesos-abiertos/
+
+Desinstalar cámaras virtuales:
+https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-desinstalar-camaras-virtuales/
+
+ANTIVIRUS WINDOWS:
+Avast:
+https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-antivirus-avast/
+
+Windows Defender:
+https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-defender-antivirus/
+
+Norton:
+https://ayuda.klarway.com/pagina-de-ayuda-de-klarway/windows-antivirus-norton/
+
+McAfee:
+https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-antivirus-macafee/
+
+Kaspersky:
+https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-antivirus-kaspersky/
+`;
+
 const sessions = new Map();
 
 function getSession(sessionId) {
@@ -37,6 +116,10 @@ function getSession(sessionId) {
       pendingLms: null,
       pendingMatches: [],
       attempts: 0,
+      dailyMessageCount: 0,
+      dailyMessageDate: new Date().toISOString().slice(0, 10),
+      verifiedSteps: [],
+      lastProblem: null,
     });
   }
 
@@ -53,51 +136,57 @@ function normalizeText(value) {
 }
 
 function isAffirmative(message) {
-  const normalized = normalizeText(message);
+  return ["si", "sí", "yes", "ok", "correcto", "correcta", "confirmo"].includes(
+    normalizeText(message)
+  );
+}
 
+function isNegative(message) {
+  return ["no", "ninguna", "ninguno", "incorrecto", "incorrecta"].includes(
+    normalizeText(message)
+  );
+}
+
+function isProblemSolvedMessage(message) {
   return [
     "si",
     "sí",
     "yes",
-    "ok",
-    "correcto",
-    "correcta",
-    "confirmo",
-    "confirmada",
-    "confirmado",
-  ].includes(normalized);
+    "listo",
+    "funciono",
+    "funcionó",
+    "yaesta",
+    "resuelto",
+    "solucionado",
+    "perfecto",
+    "gracias",
+    "muchasgracias",
+  ].includes(normalizeText(message));
 }
 
-function isNegative(message) {
-  const normalized = normalizeText(message);
-
-  return [
-    "no",
-    "ninguna",
-    "ninguno",
-    "incorrecto",
-    "incorrecta",
-  ].includes(normalized);
-}
-
-function detectSystemPreference(message) {
+function needsHumanHelp(message) {
   const text = normalizeText(message);
 
-  if (
-    text.includes("extension") ||
-    text.includes("extencion") ||
-    text.includes("chrome")
-  ) {
-    return "Extension";
+  return (
+    text.includes("ayudahumana") ||
+    text.includes("humano") ||
+    text.includes("persona") ||
+    text.includes("asesor") ||
+    text.includes("soportehumano") ||
+    text.includes("hablarconalguien") ||
+    text.includes("derivar")
+  );
+}
+
+function detectOS(message) {
+  const text = normalizeText(message);
+
+  if (text.includes("mac") || text.includes("ios") || text.includes("apple")) {
+    return "mac";
   }
 
-  if (
-    text.includes("app") ||
-    text.includes("aplicacion") ||
-    text.includes("desktop") ||
-    text.includes("escritorio")
-  ) {
-    return "App";
+  if (text.includes("windows") || text.includes("win") || text.includes("pc")) {
+    return "windows";
   }
 
   return null;
@@ -107,16 +196,10 @@ function findInstitutionById(id) {
   return INSTITUTIONS.find((institution) => institution.id === id) || null;
 }
 
-function getSystemTypeLabel(product) {
-  if (product === "App") return "la aplicación de Klarway";
-  if (product === "Extension") return "la extensión de Chrome";
-  return "Klarway";
-}
-
 function getInstitutionDisplay(institution) {
-  return `${institution.name} | Sistema: ${getSystemTypeLabel(
-    institution.product
-  )} | LMS: ${institution.lms || "No disponible"}`;
+  return `${institution.name} | Sistema: ${
+    institution.lms || "No disponible"
+  }`;
 }
 
 function confirmInstitution(session, institution) {
@@ -205,27 +288,21 @@ async function findInstitutionWithAI(institutionName) {
     model: "gpt-4o-mini",
     instructions: `
 Compará el nombre de institución escrito por el estudiante con la lista disponible.
-
 Devolvé SOLO JSON válido.
 No expliques.
 No uses markdown.
 No inventes instituciones.
-
-Reglas:
-- Si hay una coincidencia probable, devolvé status "probable_match".
-- Si hay varias posibles para la misma institución, devolvé status "multiple_matches".
-- Si no hay coincidencia clara, devolvé status "not_found".
-- Máximo 5 matches.
-- No confirmes automáticamente.
+Si encontrás varias configuraciones de una misma institución, devolvelas todas.
+Máximo 5 matches.
 `,
     input: `
-Institución escrita por el estudiante:
+Institución escrita:
 ${institutionName}
 
-Lista de instituciones disponibles:
+Lista:
 ${institutionList}
 
-Formato exacto:
+Formato:
 {
   "status": "probable_match" | "multiple_matches" | "not_found",
   "matches": [
@@ -252,38 +329,23 @@ Formato exacto:
       : [];
 
     const expanded = uniqueInstitutions(
-      rawMatches.flatMap((institution) => expandRelatedInstitutions(institution))
+      rawMatches.flatMap((institution) =>
+        expandRelatedInstitutions(institution)
+      )
     );
 
     return {
       status:
-        expanded.length > 1
-          ? "multiple_matches"
-          : parsed.status || "not_found",
-      matches: expanded.length > 0 ? expanded.slice(0, 5) : rawMatches.slice(0, 5),
+        expanded.length > 1 ? "multiple_matches" : parsed.status || "not_found",
+      matches:
+        expanded.length > 0 ? expanded.slice(0, 5) : rawMatches.slice(0, 5),
     };
-  } catch (error) {
+  } catch {
     return {
       status: "not_found",
       matches: [],
     };
   }
-}
-
-function findRelatedAlternativeByProduct(session, product) {
-  if (!session.institutionName) return null;
-
-  const normalizedCurrentName = normalizeText(session.institutionName);
-
-  return INSTITUTIONS.find((institution) => {
-    const normalizedName = normalizeText(institution.name);
-
-    return (
-      institution.product === product &&
-      (normalizedName.includes(normalizedCurrentName) ||
-        normalizedCurrentName.includes(normalizedName))
-    );
-  });
 }
 
 function getSupportTextForInstitution(session) {
@@ -293,222 +355,198 @@ function getSupportTextForInstitution(session) {
     return "No tengo datos de contacto específicos para tu institución.";
   }
 
-  const phone = institution.supportPhone || "No disponible";
-  const email = institution.supportEmail || "No disponible";
-
   return `
 Datos de contacto de tu institución:
 - Institución: ${institution.name}
-- Teléfono de soporte: ${phone}
-- Mail de soporte: ${email}
+- Teléfono de soporte: ${institution.supportPhone || "No disponible"}
+- Mail de soporte: ${institution.supportEmail || "No disponible"}
+`;
+}
+
+function addVerifiedStep(session, step) {
+  if (!session.verifiedSteps.includes(step)) {
+    session.verifiedSteps.push(step);
+  }
+}
+
+function trackProblem(session, message) {
+  const text = String(message || "").toLowerCase();
+
+  session.lastProblem = message;
+
+  if (session.product === "Extension") {
+    addVerifiedStep(session, "Se confirmó que el estudiante usa la extensión de Chrome según su institución.");
+  }
+
+  if (session.product === "App") {
+    addVerifiedStep(session, "Se confirmó que el estudiante usa la aplicación de Klarway según su institución.");
+  }
+
+  if (text.includes("extension") || text.includes("extensión")) {
+    addVerifiedStep(session, "El estudiante consultó por la extensión.");
+  }
+
+  if (text.includes("app") || text.includes("aplicación")) {
+    addVerifiedStep(session, "El estudiante consultó por la aplicación.");
+  }
+
+  if (text.includes("camara") || text.includes("cámara")) {
+    addVerifiedStep(session, "Se revisó un problema relacionado con cámara.");
+  }
+
+  if (text.includes("microfono") || text.includes("micrófono")) {
+    addVerifiedStep(session, "Se revisó un problema relacionado con micrófono.");
+  }
+
+  if (
+    text.includes("instalar") ||
+    text.includes("instalada") ||
+    text.includes("activada")
+  ) {
+    addVerifiedStep(session, "Se revisaron pasos de instalación o activación.");
+  }
+
+  if (text.includes("antivirus")) {
+    addVerifiedStep(session, "Se revisó posible interferencia de antivirus.");
+  }
+}
+
+function buildHumanHelpSummary(session) {
+  const steps =
+    session.verifiedSteps.length > 0
+      ? session.verifiedSteps.map((step) => `- ${step}`).join("\n")
+      : "- No hay pasos técnicos registrados todavía.";
+
+  return `
+Te recomiendo contactar a tu institución con este resumen:
+
+Datos del estudiante:
+- Nombre: ${session.fullName || "No disponible"}
+- Mail: ${session.email || "No disponible"}
+- Institución: ${session.institutionName || "No disponible"}
+- Sistema: ${session.lms || "No disponible"}
+
+Problema informado:
+${session.lastProblem || "No disponible"}
+
+Pasos verificados:
+${steps}
+
+${getSupportTextForInstitution(session)}
 `;
 }
 
 const SYSTEM_PROMPT = `
 Sos Klaris, el asistente virtual de soporte técnico de Klarway.
 
-IDENTIDAD:
-- Sos Klaris.
-- Nunca digas que sos ChatGPT.
-- Nunca digas que sos un modelo de OpenAI.
-- Representás al soporte técnico de Klarway.
-
-IDIOMA:
-- Respondé en español o inglés según el idioma del estudiante.
-- Usá lenguaje simple.
-
-MEMORIA DE SESIÓN:
+REGLAS PRINCIPALES:
 - Usá siempre DATOS GUARDADOS DE LA SESIÓN.
-- Si ya hay nombre, mail e institución confirmada, NO vuelvas a pedirlos.
-- Si Producto Klarway es "App", asumí que usa la aplicación de Klarway.
-- Si Producto Klarway es "Extension", asumí que usa la extensión de Chrome.
-- No vuelvas a pedir institución si ya está confirmada.
-- No vuelvas a pedir App o Extensión si Producto Klarway ya está definido.
-- Si el estudiante corrige el sistema y dice que usa extensión o app, respetá el sistema actualizado por backend.
-
-SISTEMA CONFIRMADO:
-- Si Producto Klarway es "Extension", todas las respuestas deben referirse a la extensión de Chrome.
-- Si Producto Klarway es "App", todas las respuestas deben referirse a la aplicación de Klarway.
-- Si el usuario pregunta cómo ver si la extensión está instalada o activada, respondé sobre Chrome y chrome://extensions/.
-- No cambies a cámara, micrófono o app si la pregunta actual es sobre instalación, activación o verificación de extensión.
-
-DATOS MÍNIMOS:
-Antes de diagnosticar necesitás:
-1. Nombre y apellido
-2. Mail personal o institucional
-3. Institución confirmada
-
-Pero si esos datos ya están en sesión, NO los vuelvas a pedir.
-
-INSTITUCIÓN:
-- Si el backend dice que la institución está confirmada, usala.
-- Si el backend dice que hay institución pendiente, esperá confirmación del estudiante.
-- Si Producto Klarway está definido, usalo para decidir App o Extensión.
-- Si hay más de una configuración para la misma institución, preguntá cuál usa según el LMS o sistema indicado.
-
-ESTILO:
-- Claro, simple y paciente.
-- Una pregunta por vez.
+- No repitas pedidos de nombre, mail o institución si ya están guardados.
+- La definición App o Extensión SIEMPRE viene de Producto Klarway de la institución confirmada.
+- No cambies App o Extensión por lo que diga el estudiante.
+- Si Producto Klarway es "Extension", respondé sobre la extensión de Chrome.
+- Si Producto Klarway es "App", respondé sobre la aplicación de Klarway.
+- Si el estudiante dice que usa otro sistema distinto al confirmado por institución, explicá brevemente que según su institución figura otro sistema y pedí que revise las instrucciones de su institución.
+- Si el estudiante responde que se resolvió, cerrá breve.
+- Si pide ayuda humana, indicá datos de contacto y resumen del caso.
 - Máximo 3 a 5 pasos.
 - Una instrucción por paso.
-- No uses jerga técnica.
-- No culpes al estudiante.
+- No pidas DNI, contraseñas ni datos sensibles.
+- No inventes links.
+- Usá solo el contexto oficial incluido.
 
 FUENTE OFICIAL:
-La documentación oficial es:
 ${KLARWAY_HELP_URL}
-
-Usá solamente el contexto oficial incluido en el mensaje.
-No inventes soluciones.
-No inventes links.
-
-CATEGORÍAS:
-1. Instalación incorrecta o navegador incorrecto
-2. Permisos de cámara o micrófono
-3. Cámara en uso por otra aplicación
-4. Ruido ambiente
-5. Iluminación
-6. Otro
-
-FORMATO:
-- Explicación breve
-- Pasos numerados
-- Referencia oficial si aplica
-- Pregunta final
-
-FALLBACK ES:
-En este caso, te recomiendo contactar directamente con tu institución para que puedan ayudarte con tu situación específica. Voy a derivar tu caso.
-
-FALLBACK EN:
-In this case, I recommend contacting your institution so they can assist you with your specific situation. I will escalate your case.
-
-REGLAS:
-- No pidas contraseñas.
-- No pidas DNI.
-- No pidas datos sensibles.
-- No repitas pedidos de datos ya guardados.
-- Si el problema persiste después de varios intentos, derivá y mostrale los datos de contacto de la institución si están disponibles.
 `;
 
 function getBasicKlarwayContext(message, session) {
   const text = String(message || "").toLowerCase();
   const normalized = normalizeText(message);
+  const os = detectOS(message);
 
-  const commonContext = `
-Fuente oficial:
-${KLARWAY_HELP_URL}
+  let context = `
+${KLARWAY_KNOWLEDGE}
 
-Contexto general:
-Klarway puede requerir Google Chrome, permisos de cámara y micrófono, buena iluminación, ambiente silencioso y que la cámara no esté siendo usada por otra aplicación.
+Sistema confirmado por institución:
+Producto Klarway: ${session.product || "No definido"}
+LMS/Sistema: ${session.lms || "No definido"}
 `;
+
+  if (session.product === "Extension") {
+    context += `
+Contexto específico EXTENSIÓN:
+- Usar Google Chrome.
+- Para revisar si está instalada o activada: abrir chrome://extensions/.
+- Buscar Klarway.
+- Verificar que esté activada.
+- Instalación: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/instalacion/
+- Registro: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/registro/
+- Examen: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/realizar-un-examen-2/
+`;
+  }
+
+  if (session.product === "App") {
+    context += `
+Contexto específico APP:
+- Registro: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/registro/
+- Examen: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/realizar-un-examen/
+`;
+  }
+
+  if (session.product === "App" && os === "mac") {
+    context += `
+Contexto App Mac:
+- Instalación: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/ios-instalacion/
+- Permisos cámara, micrófono y grabación de pantalla: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/ios-permiso-de-camara-microfono-y-grabacion-de-pantalla/
+- Procesos abiertos: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/permisos-ios-cerrar-procesos-abiertos/
+- Cámaras virtuales: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/ios-desinstalar-camaras-virtuales/
+`;
+  }
+
+  if (session.product === "App" && os === "windows") {
+    context += `
+Contexto App Windows:
+- Instalación: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-instalacion/
+- Permiso cámara y micrófono: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-permiso-de-camara-y-microfono/
+- Procesos abiertos: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/permisos-windows-cerrar-procesos-abiertos/
+- Cámaras virtuales: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-desinstalar-camaras-virtuales/
+`;
+  }
+
+  if (session.product === "App" && text.includes("antivirus")) {
+    context += `
+Contexto antivirus Windows:
+- Avast: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-antivirus-avast/
+- Windows Defender: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-defender-antivirus/
+- Norton: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway/windows-antivirus-norton/
+- McAfee: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-antivirus-macafee/
+- Kaspersky: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-antivirus-kaspersky/
+`;
+  }
+
+  if (
+    session.product === "App" &&
+    (normalized.includes("extension") || normalized.includes("chrome"))
+  ) {
+    context += `
+Aclaración:
+Según la institución confirmada, el estudiante figura con App. No cambiar a Extensión.
+Si el estudiante insiste en Extensión, pedirle que revise las instrucciones dadas por su institución.
+`;
+  }
 
   if (
     session.product === "Extension" &&
-    (normalized.includes("extension") ||
-      normalized.includes("instalada") ||
-      normalized.includes("instalar") ||
-      normalized.includes("activada") ||
-      normalized.includes("activar") ||
-      normalized.includes("version") ||
-      normalized.includes("chrome"))
+    (normalized.includes("app") || normalized.includes("aplicacion"))
   ) {
-    return `
-${commonContext}
-
-Tema probable:
-Extensión de Chrome.
-
-Guía:
-- Para verificar la extensión, abrir Google Chrome.
-- Ir a chrome://extensions/.
-- Buscar Klarway en la lista.
-- Verificar que esté activada.
-- Si no aparece, debe instalarse desde el enlace oficial indicado por la institución o la documentación oficial.
+    context += `
+Aclaración:
+Según la institución confirmada, el estudiante figura con Extensión. No cambiar a App.
+Si el estudiante insiste en App, pedirle que revise las instrucciones dadas por su institución.
 `;
   }
 
-  if (
-    text.includes("camara") ||
-    text.includes("cámara") ||
-    text.includes("camera") ||
-    text.includes("microfono") ||
-    text.includes("micrófono") ||
-    text.includes("microphone")
-  ) {
-    return `
-${commonContext}
-
-Tema probable:
-Problema de cámara o micrófono.
-
-Guía:
-- Revisar permisos del navegador.
-- Verificar que otra app como Zoom, Meet o Teams no esté usando la cámara.
-- Recargar la página del examen.
-`;
-  }
-
-  if (
-    text.includes("chrome") ||
-    text.includes("navegador") ||
-    text.includes("browser") ||
-    text.includes("extension") ||
-    text.includes("extensión") ||
-    text.includes("instalada") ||
-    text.includes("activada")
-  ) {
-    return `
-${commonContext}
-
-Tema probable:
-Extensión o navegador.
-
-Guía:
-- Si corresponde extensión, usar Google Chrome.
-- Abrir chrome://extensions/.
-- Buscar Klarway.
-- Verificar que esté instalada y activada.
-`;
-  }
-
-  if (
-    text.includes("ruido") ||
-    text.includes("noise") ||
-    text.includes("sonido")
-  ) {
-    return `
-${commonContext}
-
-Tema probable:
-Ruido ambiente.
-
-Guía:
-- Buscar un lugar silencioso.
-- Evitar hablar durante el examen.
-- Reducir ruidos externos.
-`;
-  }
-
-  if (
-    text.includes("luz") ||
-    text.includes("iluminacion") ||
-    text.includes("iluminación") ||
-    text.includes("light")
-  ) {
-    return `
-${commonContext}
-
-Tema probable:
-Iluminación.
-
-Guía:
-- Ubicarse en un lugar bien iluminado.
-- Evitar estar a contraluz.
-- Mantener el rostro visible.
-`;
-  }
-
-  return commonContext;
+  return context;
 }
 
 app.get("/", (req, res) => {
@@ -540,10 +578,47 @@ app.post("/api/chat", async (req, res) => {
 
     const session = getSession(sessionId);
 
+    const today = new Date().toISOString().slice(0, 10);
+
+    if (session.dailyMessageDate !== today) {
+      session.dailyMessageDate = today;
+      session.dailyMessageCount = 0;
+    }
+
+    if (session.dailyMessageCount >= 20) {
+      return res.json({
+        reply:
+          "Alcanzaste el límite de 20 mensajes por hoy. Te recomiendo contactar a tu institución para continuar con la asistencia.",
+        flowStep: "daily_limit_reached",
+        session,
+      });
+    }
+
+    session.dailyMessageCount += 1;
+
     if (fullName) session.fullName = fullName;
     if (email) session.email = email;
 
-    const systemPreference = detectSystemPreference(message);
+    if (needsHumanHelp(message)) {
+      return res.json({
+        reply: buildHumanHelpSummary(session),
+        flowStep: "human_help_requested",
+        session,
+      });
+    }
+
+    if (
+      session.institutionId &&
+      !session.pendingInstitutionId &&
+      isProblemSolvedMessage(message)
+    ) {
+      return res.json({
+        reply:
+          "Perfecto, me alegra que se haya resuelto. Si necesitás algo más, podés escribirme.",
+        flowStep: "problem_closed",
+        session,
+      });
+    }
 
     if (confirmedInstitutionId || selectedInstitutionId) {
       const confirmed = findInstitutionById(
@@ -554,9 +629,9 @@ app.post("/api/chat", async (req, res) => {
         confirmInstitution(session, confirmed);
 
         return res.json({
-          reply: `Perfecto, confirmé tu institución: ${confirmed.name}. Usás ${getSystemTypeLabel(
-            confirmed.product
-          )}. ¿En qué puedo ayudarte?`,
+          reply: `Perfecto, confirmé tu institución: ${
+            confirmed.name
+          }. Sistema: ${confirmed.lms || "No disponible"}. ¿En qué puedo ayudarte?`,
           flowStep: "institution_confirmed",
           needsInstitutionConfirmation: false,
           canContinueToProblem: true,
@@ -572,9 +647,9 @@ app.post("/api/chat", async (req, res) => {
         confirmInstitution(session, confirmed);
 
         return res.json({
-          reply: `Perfecto, confirmé tu institución: ${confirmed.name}. Usás ${getSystemTypeLabel(
-            confirmed.product
-          )}. ¿En qué puedo ayudarte?`,
+          reply: `Perfecto, confirmé tu institución: ${
+            confirmed.name
+          }. Sistema: ${confirmed.lms || "No disponible"}. ¿En qué puedo ayudarte?`,
           flowStep: "institution_confirmed",
           needsInstitutionConfirmation: false,
           canContinueToProblem: true,
@@ -599,24 +674,6 @@ app.post("/api/chat", async (req, res) => {
         matches: [],
         session,
       });
-    }
-
-    if (session.institutionId && systemPreference && session.product !== systemPreference) {
-      const alternative = findRelatedAlternativeByProduct(session, systemPreference);
-
-      if (alternative) {
-        confirmInstitution(session, alternative);
-
-        return res.json({
-          reply: `Perfecto, actualicé el sistema: para ${alternative.name} estás usando ${getSystemTypeLabel(
-            alternative.product
-          )}. ¿En qué puedo ayudarte?`,
-          flowStep: "system_updated",
-          needsInstitutionConfirmation: false,
-          canContinueToProblem: true,
-          session,
-        });
-      }
     }
 
     if (!session.institutionId && institutionName) {
@@ -653,7 +710,10 @@ app.post("/api/chat", async (req, res) => {
         session.pendingMatches = institutionResult.matches;
 
         const options = institutionResult.matches
-          .map((institution, index) => `${index + 1}. ${getInstitutionDisplay(institution)}`)
+          .map(
+            (institution, index) =>
+              `${index + 1}. ${getInstitutionDisplay(institution)}`
+          )
           .join("\n");
 
         return res.json({
@@ -679,8 +739,8 @@ app.post("/api/chat", async (req, res) => {
 
     if (!session.institutionId && session.pendingMatches.length > 0) {
       const normalizedMessage = normalizeText(message);
-
       const selectedByNumber = Number(normalizedMessage);
+
       if (
         selectedByNumber &&
         selectedByNumber >= 1 &&
@@ -690,29 +750,15 @@ app.post("/api/chat", async (req, res) => {
         confirmInstitution(session, selected);
 
         return res.json({
-          reply: `Perfecto, confirmé tu institución: ${selected.name}. Usás ${getSystemTypeLabel(
-            selected.product
-          )}. ¿En qué puedo ayudarte?`,
+          reply: `Perfecto, confirmé tu institución: ${
+            selected.name
+          }. Sistema: ${selected.lms || "No disponible"}. ¿En qué puedo ayudarte?`,
           flowStep: "institution_confirmed",
-          needsInstitutionConfirmation: false,
-          canContinueToProblem: true,
           session,
         });
       }
 
       const selectedBySystem = session.pendingMatches.find((institution) => {
-        if (normalizedMessage.includes("extension") && institution.product === "Extension") {
-          return true;
-        }
-
-        if (
-          (normalizedMessage.includes("app") ||
-            normalizedMessage.includes("aplicacion")) &&
-          institution.product === "App"
-        ) {
-          return true;
-        }
-
         return normalizeText(institution.lms).includes(normalizedMessage);
       });
 
@@ -720,12 +766,10 @@ app.post("/api/chat", async (req, res) => {
         confirmInstitution(session, selectedBySystem);
 
         return res.json({
-          reply: `Perfecto, confirmé tu institución: ${selectedBySystem.name}. Usás ${getSystemTypeLabel(
-            selectedBySystem.product
-          )}. ¿En qué puedo ayudarte?`,
+          reply: `Perfecto, confirmé tu institución: ${
+            selectedBySystem.name
+          }. Sistema: ${selectedBySystem.lms || "No disponible"}. ¿En qué puedo ayudarte?`,
           flowStep: "institution_confirmed",
-          needsInstitutionConfirmation: false,
-          canContinueToProblem: true,
           session,
         });
       }
@@ -741,11 +785,11 @@ app.post("/api/chat", async (req, res) => {
         reply:
           "Para poder ayudarte, primero necesito estos datos:\n\n1. Nombre y apellido\n2. Mail personal o institucional\n3. Institución donde tenés que rendir el examen",
         flowStep: "collect_student_data",
-        needsInstitutionConfirmation: false,
-        canContinueToProblem: false,
         session,
       });
     }
+
+    trackProblem(session, message);
 
     const institutionContext = getInstitutionContext(session.institutionId);
     const klarwayContext = getBasicKlarwayContext(message, session);
@@ -770,8 +814,9 @@ Mail: ${session.email}
 Institución confirmada: ${session.institutionName}
 Institución confirmada ID: ${session.institutionId}
 Producto Klarway: ${session.product}
-LMS: ${session.lms}
+Sistema/LMS: ${session.lms}
 Intentos de solución: ${session.attempts}
+Mensajes usados hoy: ${session.dailyMessageCount}/20
 
 INSTITUCIÓN CONFIRMADA:
 ${institutionContext}
@@ -779,20 +824,21 @@ ${institutionContext}
 CONTACTO DE LA INSTITUCIÓN:
 ${supportText}
 
+PASOS YA VERIFICADOS:
+${session.verifiedSteps.map((step) => `- ${step}`).join("\n") || "Sin pasos registrados todavía."}
+
 MENSAJE DEL ESTUDIANTE:
 ${message}
 `,
         },
       ],
       temperature: 0.2,
-      max_output_tokens: 450,
+      max_output_tokens: 500,
     });
 
     res.json({
       reply: response.output_text,
       flowStep: "answer_problem",
-      needsInstitutionConfirmation: false,
-      canContinueToProblem: true,
       session,
     });
   } catch (err) {
