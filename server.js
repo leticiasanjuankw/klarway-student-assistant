@@ -99,6 +99,13 @@ https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-antivirus-kaspers
 
 const sessions = new Map();
 
+function normalizeInstitutionText(value) {
+  return normalizeText(value)
+    .replace(/xxi/g, "21")
+    .replace(/sigloveintiuno/g, "siglo21")
+    .replace(/veintiuno/g, "21");
+}
+
 function getSession(sessionId) {
   const id = sessionId || "default-session";
 
@@ -145,6 +152,47 @@ function isNegative(message) {
   return ["no", "ninguna", "ninguno", "incorrecto", "incorrecta"].includes(
     normalizeText(message)
   );
+}
+
+function similarity(a, b) {
+  if (!a || !b) return 0;
+
+  const longer = a.length > b.length ? a : b;
+  const shorter = a.length > b.length ? b : a;
+
+  if (longer.length === 0) return 1;
+
+  const distance = levenshteinDistance(longer, shorter);
+
+  return (longer.length - distance) / longer.length;
+}
+
+function levenshteinDistance(a, b) {
+  const matrix = [];
+
+  for (let i = 0; i <= b.length; i++) {
+    matrix[i] = [i];
+  }
+
+  for (let j = 0; j <= a.length; j++) {
+    matrix[0][j] = j;
+  }
+
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        );
+      }
+    }
+  }
+
+  return matrix[b.length][a.length];
 }
 
 function isProblemSolvedMessage(message) {
@@ -217,15 +265,16 @@ function confirmInstitution(session, institution) {
 function findInstitutionCandidates(institutionName) {
   if (!institutionName) return [];
 
-  const normalizedInput = normalizeText(institutionName);
+  const normalizedInput = normalizeInstitutionText(institutionName);
 
   return INSTITUTIONS.filter((institution) => {
-    const normalizedName = normalizeText(institution.name);
+    const normalizedName = normalizeInstitutionText(institution.name);
 
     return (
       normalizedName === normalizedInput ||
       normalizedName.includes(normalizedInput) ||
-      normalizedInput.includes(normalizedName)
+      normalizedInput.includes(normalizedName) ||
+      similarity(normalizedName, normalizedInput) >= 0.7
     );
   });
 }
@@ -284,9 +333,17 @@ async function findInstitutionWithAI(institutionName) {
       `ID: ${institution.id} | Nombre: ${institution.name} | Producto: ${institution.product} | LMS: ${institution.lms}`
   ).join("\n");
 
+	if (deterministicMatches.length === 0) {
+  	return {
+    	status: "not_found",
+    	matches: [],
+  	};
+	}
+
   const response = await openai.responses.create({
     model: "gpt-4o-mini",
-    instructions: `
+    instructions:
+ `
 Compará el nombre de institución escrito por el estudiante con la lista disponible.
 Devolvé SOLO JSON válido.
 No expliques.
