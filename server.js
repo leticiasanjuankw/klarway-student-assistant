@@ -18,6 +18,33 @@ const openai = new OpenAI({
 const KLARWAY_HELP_URL =
   "https://ayuda.klarway.com/pagina-de-ayuda-de-klarway/";
 
+const KLARWAY_FAQS = `
+PREGUNTAS FRECUENTES:
+
+¿Qué ocurre si no se puede tomar la fotografía de mi rostro?
+Deberás contactarte con la mesa de ayuda de tu institución para recibir asesoramiento.
+El registro podrá completarse cuando la imagen haya sido correctamente tomada.
+Tu cara debe verse completa.
+Evita usar accesorios como gafas, gorros, auriculares, pañuelos, bufandas, etc.
+
+¿Qué ocurre si no se puede tomar la fotografía de mi identificación?
+Deberás aguardar a que la institución valide tus datos de forma manual.
+Solo podrás realizar exámenes una vez que el registro haya sido aprobado.
+La fotografía puede fallar si la imagen del rostro está oscura o tiene marcas que impiden su correcta captura.
+
+¿Tengo que registrarme cada vez que realizo el examen?
+No. El registro se realiza solo una vez. Luego podrás realizar tus exámenes.
+
+¿Qué debo hacer si deseo cambiar mi registro?
+Deberás comunicarte con tu institución y solicitar el pedido.
+
+¿Dónde encuentro el estado de mi registro manual?
+Debés ingresar al botón "Registro Klarway".
+Los estados posibles son:
+- En revisión: tu registro continúa en verificación y aún no podés realizar exámenes.
+- Rechazado: tendrás que registrarte nuevamente y no podés realizar exámenes hasta que quede aprobado.
+`;
+
 const KLARWAY_KNOWLEDGE = `
 CENTRO DE AYUDA:
 Buscá la información que necesites para hacer tu examen con proctoring de manera segura y tranquilo.
@@ -523,6 +550,7 @@ function getBasicKlarwayContext(message, session) {
 
   let context = `
 ${KLARWAY_KNOWLEDGE}
+${KLARWAY_FAQS}
 
 Sistema confirmado por institución:
 Producto Klarway: ${session.product || "No definido"}
