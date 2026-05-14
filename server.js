@@ -360,13 +360,6 @@ async function findInstitutionWithAI(institutionName) {
       `ID: ${institution.id} | Nombre: ${institution.name} | Producto: ${institution.product} | LMS: ${institution.lms}`
   ).join("\n");
 
-	if (deterministicMatches.length === 0) {
-  	return {
-    	status: "not_found",
-    	matches: [],
-  	};
-	}
-
   const response = await openai.responses.create({
     model: "gpt-4o-mini",
     instructions:
@@ -524,6 +517,11 @@ const SYSTEM_PROMPT = `
 Sos Klaris, el asistente virtual de soporte técnico de Klarway.
 
 REGLAS PRINCIPALES:
+- Sé amable, breve y concreto.
+- No des explicaciones internas si el estudiante no las pide.
+- No menciones el LMS/Sistema en mensajes de confirmación de institución.
+- Hacé una sola pregunta por mensaje.
+- Evitá mensajes largos cuando una frase corta alcanza.
 - Usá siempre DATOS GUARDADOS DE LA SESIÓN.
 - No repitas pedidos de nombre, mail o institución si ya están guardados.
 - La definición App o Extensión SIEMPRE viene de Producto Klarway de la institución confirmada.
@@ -714,9 +712,7 @@ app.post("/api/chat", async (req, res) => {
         confirmInstitution(session, confirmed);
 
         return res.json({
-          reply: `Perfecto, confirmé tu institución: ${
-            confirmed.name
-          }. Sistema: ${confirmed.lms || "No disponible"}. ¿En qué puedo ayudarte?`,
+          reply: `Listo, confirmé tu institución: ${confirmed.name}. ¿Con qué necesitás ayuda?`,
           flowStep: "institution_confirmed",
           needsInstitutionConfirmation: false,
           canContinueToProblem: true,
@@ -732,9 +728,7 @@ app.post("/api/chat", async (req, res) => {
         confirmInstitution(session, confirmed);
 
         return res.json({
-          reply: `Perfecto, confirmé tu institución: ${
-            confirmed.name
-          }. Sistema: ${confirmed.lms || "No disponible"}. ¿En qué puedo ayudarte?`,
+          reply: `Listo, confirmé tu institución: ${confirmed.name}. ¿Con qué necesitás ayuda?`,
           flowStep: "institution_confirmed",
           needsInstitutionConfirmation: false,
           canContinueToProblem: true,
@@ -779,7 +773,7 @@ app.post("/api/chat", async (req, res) => {
         session.pendingMatches = institutionResult.matches;
 
         return res.json({
-          reply: `Encontré una posible coincidencia: ${match.name}. ¿Tu institución es esa?`,
+          reply: `Encontré ${match.name}. ¿Es tu institución?`,
           flowStep: "confirm_institution",
           needsInstitutionConfirmation: true,
           canContinueToProblem: false,
@@ -835,9 +829,7 @@ app.post("/api/chat", async (req, res) => {
         confirmInstitution(session, selected);
 
         return res.json({
-          reply: `Perfecto, confirmé tu institución: ${
-            selected.name
-          }. Sistema: ${selected.lms || "No disponible"}. ¿En qué puedo ayudarte?`,
+          reply: `Listo, confirmé tu institución: ${selected.name}. ¿Con qué necesitás ayuda?`,
           flowStep: "institution_confirmed",
           session,
         });
@@ -851,25 +843,33 @@ app.post("/api/chat", async (req, res) => {
         confirmInstitution(session, selectedBySystem);
 
         return res.json({
-          reply: `Perfecto, confirmé tu institución: ${
-            selectedBySystem.name
-          }. Sistema: ${selectedBySystem.lms || "No disponible"}. ¿En qué puedo ayudarte?`,
+          reply: `Listo, confirmé tu institución: ${selectedBySystem.name}. ¿Con qué necesitás ayuda?`,
           flowStep: "institution_confirmed",
           session,
         });
       }
     }
 
-    const hasMinimumData =
-      Boolean(session.fullName) &&
-      Boolean(session.email) &&
-      Boolean(session.institutionId);
-
-    if (!hasMinimumData) {
+    if (!session.fullName) {
       return res.json({
-        reply:
-          "Para poder ayudarte, primero necesito estos datos:\n\n1. Nombre y apellido\n2. Mail personal o institucional\n3. Institución donde tenés que rendir el examen",
-        flowStep: "collect_student_data",
+        reply: "¿Cuál es tu nombre y apellido?",
+        flowStep: "collect_full_name",
+        session,
+      });
+    }
+
+    if (!session.email) {
+      return res.json({
+        reply: "Gracias. ¿Cuál es tu email?",
+        flowStep: "collect_email",
+        session,
+      });
+    }
+
+    if (!session.institutionId) {
+      return res.json({
+        reply: "¿De qué institución sos?",
+        flowStep: "collect_institution",
         session,
       });
     }
