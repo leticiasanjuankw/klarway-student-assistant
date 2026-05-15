@@ -174,6 +174,7 @@ function getSession(sessionId) {
       dailyMessageDate: new Date().toISOString().slice(0, 10),
       verifiedSteps: [],
       lastProblem: null,
+      humanHelpRequested: false,
     });
   }
 
@@ -270,7 +271,8 @@ function needsHumanHelp(message) {
     text.includes("asesor") ||
     text.includes("soportehumano") ||
     text.includes("hablarconalguien") ||
-    text.includes("derivar")
+    text.includes("derivar") ||
+    text.includes("necesitoayudahumana")
   );
 }
 
@@ -419,8 +421,12 @@ function confirmsPendingInstitutionByName(session, message) {
   );
 }
 
+/*
+  Validación simple pedida:
+  el email debe tener al menos un @.
+*/
 function looksLikeEmail(value) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+  return String(value || "").includes("@");
 }
 
 function looksLikeProblemMessage(message) {
@@ -536,13 +542,22 @@ Datos del estudiante:
 - Sistema: ${session.lms || "No disponible"}
 
 Problema informado:
-${session.lastProblem || "No disponible"}
+${session.lastProblem || "Pedido de ayuda humana."}
 
 Pasos verificados:
 ${steps}
 
 ${getSupportTextForInstitution(session)}
 `;
+}
+
+function shouldDeliverHumanHelp(session) {
+  return (
+    session.humanHelpRequested &&
+    Boolean(session.fullName) &&
+    looksLikeEmail(session.email) &&
+    Boolean(session.institutionId)
+  );
 }
 
 const SYSTEM_PROMPT = `
@@ -570,7 +585,7 @@ REGLAS PRINCIPALES:
 - Si Producto Klarway es "App", respondé sobre la aplicación de Klarway.
 - Si el estudiante dice que usa otro sistema distinto al confirmado por institución, explicá brevemente que según su institución figura otro sistema y pedí que revise las instrucciones de su institución.
 - Si el estudiante responde que se resolvió, cerrá breve.
-- Si pide ayuda humana, indicá datos de contacto y resumen del caso.
+- Si pide ayuda humana, no derives hasta tener nombre, email e institución confirmada.
 - Máximo 3 a 5 pasos.
 - Una instrucción por paso.
 - No pidas DNI, contraseñas ni datos sensibles.
@@ -779,11 +794,54 @@ function buildInstitutionSearchResponse(session, institutionText) {
   }
 
   return {
-    reply: "No pude identificar tu institución. ¿Podés escribir el nombre completo?",
+    reply:
+      "No pude identificar tu institución. ¿Podés escribir el nombre completo?",
     flowStep: "institution_not_found",
     needsInstitutionConfirmation: true,
     canContinueToProblem: false,
     matches: [],
+    session,
+  };
+}
+
+function buildNextRequiredHumanHelpStep(session) {
+  if (!session.fullName) {
+    return {
+      reply: "Para derivarte necesito tus datos. ¿Cuál es tu nombre y apellido?",
+      flowStep: "collect_full_name_for_human_help",
+      session,
+    };
+  }
+
+  if (!session.email) {
+    return {
+      reply: "¿Cuál es tu email?",
+      flowStep: "collect_email_for_human_help",
+      session,
+    };
+  }
+
+  if (!looksLikeEmail(session.email)) {
+    session.email = null;
+
+    return {
+      reply: "El email debe incluir @. ¿Cuál es tu email?",
+      flowStep: "collect_email_for_human_help",
+      session,
+    };
+  }
+
+  if (!session.institutionId) {
+    return {
+      reply: "¿De qué institución sos?",
+      flowStep: "collect_institution_for_human_help",
+      session,
+    };
+  }
+
+  return {
+    reply: buildHumanHelpSummary(session),
+    flowStep: "human_help_requested",
     session,
   };
 }
@@ -837,14 +895,28 @@ app.post("/api/chat", async (req, res) => {
     session.dailyMessageCount += 1;
 
     if (fullName) session.fullName = fullName;
-    if (email) session.email = email;
+
+    if (email) {
+      if (looksLikeEmail(email)) {
+        session.email = email;
+      } else {
+        session.email = null;
+
+        return res.json({
+          reply: "El email debe incluir @. ¿Cuál es tu email?",
+          flowStep: session.humanHelpRequested
+            ? "collect_email_for_human_help"
+            : "collect_email",
+          session,
+        });
+      }
+    }
 
     if (needsHumanHelp(trimmedMessage)) {
-      return res.json({
-        reply: buildHumanHelpSummary(session),
-        flowStep: "human_help_requested",
-        session,
-      });
+      session.humanHelpRequested = true;
+      session.lastProblem = "Pedido de ayuda humana.";
+
+      return res.json(buildNextRequiredHumanHelpStep(session));
     }
 
     if (
@@ -869,6 +941,14 @@ app.post("/api/chat", async (req, res) => {
       if (confirmed) {
         confirmInstitution(session, confirmed);
 
+        if (shouldDeliverHumanHelp(session)) {
+          return res.json({
+            reply: buildHumanHelpSummary(session),
+            flowStep: "human_help_requested",
+            session,
+          });
+        }
+
         return res.json({
           reply: "¿En qué puedo ayudarte?",
           flowStep: "institution_confirmed",
@@ -889,6 +969,14 @@ app.post("/api/chat", async (req, res) => {
       if (confirmed) {
         confirmInstitution(session, confirmed);
 
+        if (shouldDeliverHumanHelp(session)) {
+          return res.json({
+            reply: buildHumanHelpSummary(session),
+            flowStep: "human_help_requested",
+            session,
+          });
+        }
+
         return res.json({
           reply: "¿En qué puedo ayudarte?",
           flowStep: "institution_confirmed",
@@ -908,7 +996,9 @@ app.post("/api/chat", async (req, res) => {
 
       return res.json({
         reply: "Entendido. ¿Cuál es el nombre completo de tu institución?",
-        flowStep: "institution_not_confirmed",
+        flowStep: session.humanHelpRequested
+          ? "collect_institution_for_human_help"
+          : "institution_not_confirmed",
         needsInstitutionConfirmation: true,
         canContinueToProblem: false,
         matches: [],
@@ -928,6 +1018,14 @@ app.post("/api/chat", async (req, res) => {
         const selected = session.pendingMatches[selectedByNumber - 1];
         confirmInstitution(session, selected);
 
+        if (shouldDeliverHumanHelp(session)) {
+          return res.json({
+            reply: buildHumanHelpSummary(session),
+            flowStep: "human_help_requested",
+            session,
+          });
+        }
+
         return res.json({
           reply: "¿En qué puedo ayudarte?",
           flowStep: "institution_confirmed",
@@ -943,6 +1041,14 @@ app.post("/api/chat", async (req, res) => {
 
       if (selectedBySystem) {
         confirmInstitution(session, selectedBySystem);
+
+        if (shouldDeliverHumanHelp(session)) {
+          return res.json({
+            reply: buildHumanHelpSummary(session),
+            flowStep: "human_help_requested",
+            session,
+          });
+        }
 
         return res.json({
           reply: "¿En qué puedo ayudarte?",
@@ -965,7 +1071,63 @@ app.post("/api/chat", async (req, res) => {
     }
 
     /*
-      Flujo de datos de a uno, usando también el message.
+      Flujo de ayuda humana.
+      Si el usuario ya pidió ayuda humana, seguimos juntando datos
+      hasta tener nombre, email con @ e institución confirmada.
+    */
+    if (session.humanHelpRequested) {
+      if (!session.fullName) {
+        if (
+          trimmedMessage &&
+          !looksLikeEmail(trimmedMessage) &&
+          findInstitutionInstant(trimmedMessage).matches.length === 0 &&
+          !looksLikeProblemMessage(trimmedMessage)
+        ) {
+          session.fullName = trimmedMessage;
+
+          return res.json(buildNextRequiredHumanHelpStep(session));
+        }
+
+        return res.json(buildNextRequiredHumanHelpStep(session));
+      }
+
+      if (!session.email) {
+        if (looksLikeEmail(trimmedMessage)) {
+          session.email = trimmedMessage;
+
+          return res.json(buildNextRequiredHumanHelpStep(session));
+        }
+
+        return res.json({
+          reply: "El email debe incluir @. ¿Cuál es tu email?",
+          flowStep: "collect_email_for_human_help",
+          session,
+        });
+      }
+
+      if (!looksLikeEmail(session.email)) {
+        session.email = null;
+
+        return res.json({
+          reply: "El email debe incluir @. ¿Cuál es tu email?",
+          flowStep: "collect_email_for_human_help",
+          session,
+        });
+      }
+
+      if (!session.institutionId) {
+        return res.json(buildInstitutionSearchResponse(session, trimmedMessage));
+      }
+
+      return res.json({
+        reply: buildHumanHelpSummary(session),
+        flowStep: "human_help_requested",
+        session,
+      });
+    }
+
+    /*
+      Flujo normal de datos de a uno, usando también el message.
       Esto evita que Klaris vuelva a pedir datos que el usuario ya escribió.
     */
     if (!session.fullName) {
@@ -1003,7 +1165,17 @@ app.post("/api/chat", async (req, res) => {
       }
 
       return res.json({
-        reply: "¿Cuál es tu email?",
+        reply: "El email debe incluir @. ¿Cuál es tu email?",
+        flowStep: "collect_email",
+        session,
+      });
+    }
+
+    if (!looksLikeEmail(session.email)) {
+      session.email = null;
+
+      return res.json({
+        reply: "El email debe incluir @. ¿Cuál es tu email?",
         flowStep: "collect_email",
         session,
       });

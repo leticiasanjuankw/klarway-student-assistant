@@ -63,7 +63,7 @@ export const INSTITUTIONS = [
   },
   {
     id: "siglo-21",
-    name: "Siglo 21",
+    name: "Siglo 21 - SOE - Sistema Online de Exámenes",
     product: "App",
     lms: "SOE - Sistema Online de Exámenes",
     supportPhone: "0810-888-3721",
