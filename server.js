@@ -16,7 +16,7 @@ const openai = new OpenAI({
 });
 
 const KLARWAY_HELP_URL =
-  "https://ayuda.klarway.com/pagina-de-ayuda-de-klarway/";
+  "https://klarway-web.fly.dev/soporte/";
 
 const CHROME_STORE_KLARWAY_URL =
   "https://chromewebstore.google.com/search/klarway?hl=es&utm_source=ext_sidebar";
@@ -65,66 +65,70 @@ No cambiar esta definición por lo que diga el estudiante. Si hay conflicto, acl
 REQUISITOS:
 Los requisitos son iguales para app y extensión.
 En extensión es necesario usar Google Chrome.
-https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/requisitos-2/
+https://klarway-web.fly.dev/soporte/requisitos-extension
 
 EXTENSIÓN:
 Instalación:
-https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/instalacion/
+https://klarway-web.fly.dev/soporte/instalacion-extension
 
 Registro:
-https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/registro/
+https://klarway-web.fly.dev/soporte/registro-extension
 
 Realizar un examen:
-https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/realizar-un-examen-2/
+https://klarway-web.fly.dev/soporte/examen-extension-sin-sg-sin-ec
 
 APP:
+
+Instalacion:
+https://klarway-web.fly.dev/soporte/instalacion-aplicacion
+
 Registro:
-https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/registro/
+https://klarway-web.fly.dev/soporte/registro-aplicacion
 
 Realizar un examen:
-https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/realizar-un-examen/
+https://klarway-web.fly.dev/soporte/realizar-un-examen
 
 APP MAC:
 Instalar Klarway:
-https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/ios-instalacion/
+https://klarway-web.fly.dev/soporte/instalacion-aplicacion
 
 Permisos de cámara, micrófono y grabación de pantalla:
-https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/ios-permiso-de-camara-microfono-y-grabacion-de-pantalla/
+https://klarway-web.fly.dev/soporte/permisos-camara-mac
 
 Cerrar procesos abiertos:
-https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/permisos-ios-cerrar-procesos-abiertos/
+https://klarway-web.fly.dev/soporte/cerrar-procesos-mac
 
 Desinstalar cámaras virtuales:
-https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/ios-desinstalar-camaras-virtuales/
+https://klarway-web.fly.dev/soporte/camaras-virtuales-mac
 
 APP WINDOWS:
 Instalar Klarway:
-https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-instalacion/
+https://klarway-web.fly.dev/soporte/instalacion-aplicacion
 
 Permiso de cámara y micrófono:
-https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-permiso-de-camara-y-microfono/
+https://klarway-web.fly.dev/soporte/permisos-camara-windows
 
 Cerrar procesos abiertos:
-https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/permisos-windows-cerrar-procesos-abiertos/
+https://klarway-web.fly.dev/soporte/cerrar-procesos-windows
 
 Desinstalar cámaras virtuales:
-https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-desinstalar-camaras-virtuales/
+https://klarway-web.fly.dev/soporte/camaras-virtuales-windows
 
 ANTIVIRUS WINDOWS:
 Avast:
-https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-antivirus-avast/
+https://klarway-web.fly.dev/soporte/antivirus-avast
 
 Windows Defender:
-https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-defender-antivirus/
+https://klarway-web.fly.dev/soporte/antivirus-defender
 
 Norton:
-https://ayuda.klarway.com/pagina-de-ayuda-de-klarway/windows-antivirus-norton/
+https://klarway-web.fly.dev/soporte/antivirus-norton
 
 McAfee:
-https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-antivirus-macafee/
+https://klarway-web.fly.dev/soporte/antivirus-mcafee
 
 Kaspersky:
-https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-antivirus-kaspersky/
+https://klarway-web.fly.dev/soporte/antivirus-kaspersky
 `;
 
 const sessions = new Map();
@@ -618,47 +622,47 @@ Contexto específico EXTENSIÓN:
 1. Accedé a [Google Chrome Store](${CHROME_STORE_KLARWAY_URL}).
 2. Confirmá que la extensión Klarway está instalada. Si no lo está, instalala.
 - No indiques chrome://extensions/ para instalar, verificar o activar la extensión.
-- Registro: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/registro/
-- Examen: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/realizar-un-examen-2/
+- Registro: https://klarway-web.fly.dev/soporte/registro-extension/
+- Examen: https://klarway-web.fly.dev/soporte/examen-extension-sin-sg-sin-ec/
 `;
   }
 
   if (session.product === "App") {
     context += `
 Contexto específico APP:
-- Registro: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/registro/
-- Examen: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/realizar-un-examen/
+- Registro: https://klarway-web.fly.dev/soporte/registro-aplicacion/
+- Examen: https://klarway-web.fly.dev/soporte/examen-aplicacion/
 `;
   }
 
   if (session.product === "App" && os === "mac") {
     context += `
 Contexto App Mac:
-- Instalación: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/ios-instalacion/
-- Permisos cámara, micrófono y grabación de pantalla: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/ios-permiso-de-camara-microfono-y-grabacion-de-pantalla/
-- Procesos abiertos: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/permisos-ios-cerrar-procesos-abiertos/
-- Cámaras virtuales: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/ios-desinstalar-camaras-virtuales/
+- Instalación: https://klarway-web.fly.dev/soporte/instalacion-aplicacion/
+- Permisos cámara, micrófono y grabación de pantalla: https://klarway-web.fly.dev/soporte/permisos-camara-mac/
+- Procesos abiertos: https://klarway-web.fly.dev/soporte/cerrar-procesos-mac/
+- Cámaras virtuales: https://klarway-web.fly.dev/soporte/camaras-virtuales-mac/
 `;
   }
 
   if (session.product === "App" && os === "windows") {
     context += `
 Contexto App Windows:
-- Instalación: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-instalacion/
-- Permiso cámara y micrófono: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-permiso-de-camara-y-microfono/
-- Procesos abiertos: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/permisos-windows-cerrar-procesos-abiertos/
-- Cámaras virtuales: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-desinstalar-camaras-virtuales/
+- Instalación: https://klarway-web.fly.dev/soporte/instalacion-aplicacion/
+- Permiso cámara y micrófono: https://klarway-web.fly.dev/soporte/permisos-camara-windows/
+- Procesos abiertos: https://klarway-web.fly.dev/soporte/cerrar-procesos-windows/
+- Cámaras virtuales: https://klarway-web.fly.dev/soporte/camaras-virtuales-windows/
 `;
   }
 
   if (session.product === "App" && text.includes("antivirus")) {
     context += `
 Contexto antivirus Windows:
-- Avast: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-antivirus-avast/
-- Windows Defender: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-defender-antivirus/
-- Norton: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway/windows-antivirus-norton/
-- McAfee: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-antivirus-macafee/
-- Kaspersky: https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-antivirus-kaspersky/
+- Avast: https://klarway-web.fly.dev/soporte/antivirus-avast/
+- Windows Defender: https://klarway-web.fly.dev/soporte/antivirus-defender/
+- Norton: https://klarway-web.fly.dev/soporte/antivirus-norton/
+- McAfee: https://klarway-web.fly.dev/soporte/antiviruss-mcafee/
+- Kaspersky: https://klarway-web.fly.dev/soporte/antivirus-kaspersky/
 `;
   }
 
