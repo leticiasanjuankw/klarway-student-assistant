@@ -270,13 +270,20 @@ function needsHumanHelp(message) {
 
   return (
     text.includes("ayudahumana") ||
+    text.includes("necesitoayudahumana") ||
+    text.includes("quieroayudahumana") ||
     text.includes("humano") ||
+    text.includes("humanos") ||
     text.includes("persona") ||
     text.includes("asesor") ||
+    text.includes("agente") ||
+    text.includes("operador") ||
     text.includes("soportehumano") ||
     text.includes("hablarconalguien") ||
+    text.includes("hablarconunapersona") ||
+    text.includes("atencionhumana") ||
     text.includes("derivar") ||
-    text.includes("necesitoayudahumana")
+    text.includes("derivame")
   );
 }
 
@@ -661,7 +668,7 @@ Contexto antivirus Windows:
 - Avast: https://klarway-web.fly.dev/soporte/antivirus-avast/
 - Windows Defender: https://klarway-web.fly.dev/soporte/antivirus-defender/
 - Norton: https://klarway-web.fly.dev/soporte/antivirus-norton/
-- McAfee: https://klarway-web.fly.dev/soporte/antiviruss-mcafee/
+- McAfee: https://klarway-web.fly.dev/soporte/antivirus-mcafee/
 - Kaspersky: https://klarway-web.fly.dev/soporte/antivirus-kaspersky/
 `;
   }
@@ -879,6 +886,7 @@ app.post("/api/chat", async (req, res) => {
 
     const session = getSession(sessionId);
     const trimmedMessage = String(message || "").trim();
+    const userAskedForHumanHelp = needsHumanHelp(trimmedMessage);
 
     const today = new Date().toISOString().slice(0, 10);
 
@@ -898,7 +906,21 @@ app.post("/api/chat", async (req, res) => {
 
     session.dailyMessageCount += 1;
 
-    if (fullName) session.fullName = fullName;
+    /*
+      IMPORTANTE:
+      Si el usuario escribió "ayuda humana" mientras el frontend estaba pidiendo nombre,
+      no guardar ese texto como fullName.
+    */
+    if (userAskedForHumanHelp) {
+      session.humanHelpRequested = true;
+      session.lastProblem = "Pedido de ayuda humana.";
+
+      return res.json(buildNextRequiredHumanHelpStep(session));
+    }
+
+    if (fullName && !needsHumanHelp(fullName)) {
+      session.fullName = fullName;
+    }
 
     if (email) {
       if (looksLikeEmail(email)) {
@@ -914,13 +936,6 @@ app.post("/api/chat", async (req, res) => {
           session,
         });
       }
-    }
-
-    if (needsHumanHelp(trimmedMessage)) {
-      session.humanHelpRequested = true;
-      session.lastProblem = "Pedido de ayuda humana.";
-
-      return res.json(buildNextRequiredHumanHelpStep(session));
     }
 
     if (
@@ -1084,6 +1099,7 @@ app.post("/api/chat", async (req, res) => {
         if (
           trimmedMessage &&
           !looksLikeEmail(trimmedMessage) &&
+          !needsHumanHelp(trimmedMessage) &&
           findInstitutionInstant(trimmedMessage).matches.length === 0 &&
           !looksLikeProblemMessage(trimmedMessage)
         ) {
@@ -1138,6 +1154,7 @@ app.post("/api/chat", async (req, res) => {
       if (
         trimmedMessage &&
         !looksLikeEmail(trimmedMessage) &&
+        !needsHumanHelp(trimmedMessage) &&
         findInstitutionInstant(trimmedMessage).matches.length === 0 &&
         !looksLikeProblemMessage(trimmedMessage)
       ) {
