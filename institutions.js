@@ -1,3 +1,9 @@
+const INSTITUTION_ALIASES = {
+  unac: ["unac idiomas"],
+  siglo21: ["universidad siglo 21"],
+  ucasal: ["universidad catolica de salta"],
+};
+
 export const INSTITUTIONS = [
   {
     id: "barcelo",
