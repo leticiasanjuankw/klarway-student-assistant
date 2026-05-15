@@ -126,6 +126,23 @@ https://ayuda.klarway.com/pagina-de-ayuda-de-klarway-2/windows-antivirus-kaspers
 
 const sessions = new Map();
 
+/*
+  Aliases para que la búsqueda de institución sea instantánea.
+  Agregá acá siglas o formas comunes que escriben los estudiantes.
+*/
+const INSTITUTION_ALIASES = {
+  unac: ["unac idiomas"],
+};
+
+function normalizeText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/g, "")
+    .trim();
+}
+
 function normalizeInstitutionText(value) {
   return normalizeText(value)
     .replace(/xxi/g, "21")
@@ -160,19 +177,20 @@ function getSession(sessionId) {
   return sessions.get(id);
 }
 
-function normalizeText(value) {
-  return String(value || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]/g, "")
-    .trim();
-}
-
 function isAffirmative(message) {
-  return ["si", "sí", "yes", "ok", "correcto", "correcta", "confirmo"].includes(
-    normalizeText(message)
-  );
+  return [
+    "si",
+    "sí",
+    "yes",
+    "ok",
+    "okay",
+    "dale",
+    "correcto",
+    "correcta",
+    "confirmo",
+    "asi es",
+    "asies",
+  ].includes(normalizeText(message));
 }
 
 function isNegative(message) {
@@ -289,20 +307,39 @@ function confirmInstitution(session, institution) {
   session.pendingMatches = [];
 }
 
+function getInstitutionSearchTexts(institution) {
+  const normalizedName = normalizeInstitutionText(institution.name);
+
+  const aliases = Object.entries(INSTITUTION_ALIASES)
+    .filter(([, institutionNames]) =>
+      institutionNames.some(
+        (institutionName) =>
+          normalizeInstitutionText(institutionName) === normalizedName
+      )
+    )
+    .map(([alias]) => normalizeInstitutionText(alias));
+
+  return [normalizedName, ...aliases];
+}
+
 function findInstitutionCandidates(institutionName) {
   if (!institutionName) return [];
 
   const normalizedInput = normalizeInstitutionText(institutionName);
 
-  return INSTITUTIONS.filter((institution) => {
-    const normalizedName = normalizeInstitutionText(institution.name);
+  if (!normalizedInput) return [];
 
-    return (
-      normalizedName === normalizedInput ||
-      normalizedName.includes(normalizedInput) ||
-      normalizedInput.includes(normalizedName) ||
-      similarity(normalizedName, normalizedInput) >= 0.7
-    );
+  return INSTITUTIONS.filter((institution) => {
+    const searchTexts = getInstitutionSearchTexts(institution);
+
+    return searchTexts.some((text) => {
+      return (
+        text === normalizedInput ||
+        text.includes(normalizedInput) ||
+        normalizedInput.includes(text) ||
+        similarity(text, normalizedInput) >= 0.7
+      );
+    });
   });
 }
 
@@ -332,7 +369,11 @@ function uniqueInstitutions(institutions) {
   });
 }
 
-async function findInstitutionWithAI(institutionName) {
+/*
+  Búsqueda instantánea de institución.
+  No llama a OpenAI. Usa solo INSTITUTIONS + aliases.
+*/
+function findInstitutionInstant(institutionName) {
   if (!institutionName) {
     return {
       status: "missing",
@@ -340,89 +381,68 @@ async function findInstitutionWithAI(institutionName) {
     };
   }
 
-  const deterministicMatches = findInstitutionCandidates(institutionName);
+  const matches = findInstitutionCandidates(institutionName);
 
-  if (deterministicMatches.length > 0) {
-    const expanded = uniqueInstitutions(
-      deterministicMatches.flatMap((institution) =>
-        expandRelatedInstitutions(institution)
-      )
-    );
-
-    return {
-      status: expanded.length === 1 ? "probable_match" : "multiple_matches",
-      matches: expanded.slice(0, 5),
-    };
-  }
-
-  const institutionList = INSTITUTIONS.map(
-    (institution) =>
-      `ID: ${institution.id} | Nombre: ${institution.name} | Producto: ${institution.product} | LMS: ${institution.lms}`
-  ).join("\n");
-
-  const response = await openai.responses.create({
-    model: "gpt-4o-mini",
-    instructions:
- `
-Compará el nombre de institución escrito por el estudiante con la lista disponible.
-Devolvé SOLO JSON válido.
-No expliques.
-No uses markdown.
-No inventes instituciones.
-Si encontrás varias configuraciones de una misma institución, devolvelas todas.
-Máximo 5 matches.
-`,
-    input: `
-Institución escrita:
-${institutionName}
-
-Lista:
-${institutionList}
-
-Formato:
-{
-  "status": "probable_match" | "multiple_matches" | "not_found",
-  "matches": [
-    {
-      "id": "string",
-      "name": "string",
-      "product": "string",
-      "lms": "string"
-    }
-  ]
-}
-`,
-    temperature: 0,
-    max_output_tokens: 500,
-  });
-
-  try {
-    const parsed = JSON.parse(response.output_text);
-
-    const rawMatches = Array.isArray(parsed.matches)
-      ? parsed.matches
-          .map((match) => findInstitutionById(match.id))
-          .filter(Boolean)
-      : [];
-
-    const expanded = uniqueInstitutions(
-      rawMatches.flatMap((institution) =>
-        expandRelatedInstitutions(institution)
-      )
-    );
-
-    return {
-      status:
-        expanded.length > 1 ? "multiple_matches" : parsed.status || "not_found",
-      matches:
-        expanded.length > 0 ? expanded.slice(0, 5) : rawMatches.slice(0, 5),
-    };
-  } catch {
+  if (matches.length === 0) {
     return {
       status: "not_found",
       matches: [],
     };
   }
+
+  const expanded = uniqueInstitutions(
+    matches.flatMap((institution) => expandRelatedInstitutions(institution))
+  );
+
+  if (expanded.length === 1) {
+    return {
+      status: "probable_match",
+      matches: expanded,
+    };
+  }
+
+  return {
+    status: "multiple_matches",
+    matches: expanded.slice(0, 5),
+  };
+}
+
+function confirmsPendingInstitutionByName(session, message) {
+  if (!session.pendingInstitutionName) return false;
+
+  return (
+    normalizeInstitutionText(message) ===
+    normalizeInstitutionText(session.pendingInstitutionName)
+  );
+}
+
+function looksLikeEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
+function looksLikeProblemMessage(message) {
+  const text = normalizeText(message);
+
+  return (
+    text.includes("problema") ||
+    text.includes("error") ||
+    text.includes("noanda") ||
+    text.includes("nofunciona") ||
+    text.includes("camara") ||
+    text.includes("microfono") ||
+    text.includes("pantalla") ||
+    text.includes("instalar") ||
+    text.includes("instalacion") ||
+    text.includes("extension") ||
+    text.includes("app") ||
+    text.includes("examen") ||
+    text.includes("registro") ||
+    text.includes("validacion") ||
+    text.includes("validar") ||
+    text.includes("antivirus") ||
+    text.includes("bloqueado") ||
+    text.includes("permiso")
+  );
 }
 
 function getSupportTextForInstitution(session) {
@@ -452,11 +472,17 @@ function trackProblem(session, message) {
   session.lastProblem = message;
 
   if (session.product === "Extension") {
-    addVerifiedStep(session, "Se confirmó que el estudiante usa la extensión de Chrome según su institución.");
+    addVerifiedStep(
+      session,
+      "Se confirmó que el estudiante usa la extensión de Chrome según su institución."
+    );
   }
 
   if (session.product === "App") {
-    addVerifiedStep(session, "Se confirmó que el estudiante usa la aplicación de Klarway según su institución.");
+    addVerifiedStep(
+      session,
+      "Se confirmó que el estudiante usa la aplicación de Klarway según su institución."
+    );
   }
 
   if (text.includes("extension") || text.includes("extensión")) {
@@ -472,7 +498,10 @@ function trackProblem(session, message) {
   }
 
   if (text.includes("microfono") || text.includes("micrófono")) {
-    addVerifiedStep(session, "Se revisó un problema relacionado con micrófono.");
+    addVerifiedStep(
+      session,
+      "Se revisó un problema relacionado con micrófono."
+    );
   }
 
   if (
@@ -632,6 +661,122 @@ Si el estudiante insiste en App, pedirle que revise las instrucciones dadas por 
   return context;
 }
 
+function buildProblemAnswerInput({ message, history, session }) {
+  const institutionContext = getInstitutionContext(session.institutionId);
+  const klarwayContext = getBasicKlarwayContext(message, session);
+  const supportText = getSupportTextForInstitution(session);
+
+  return [
+    ...history,
+    {
+      role: "user",
+      content: `
+DOCUMENTACIÓN OFICIAL DE KLARWAY:
+${klarwayContext}
+
+DATOS GUARDADOS DE LA SESIÓN:
+Nombre y apellido: ${session.fullName}
+Mail: ${session.email}
+Institución confirmada: ${session.institutionName}
+Institución confirmada ID: ${session.institutionId}
+Producto Klarway: ${session.product}
+Sistema/LMS: ${session.lms}
+Intentos de solución: ${session.attempts}
+Mensajes usados hoy: ${session.dailyMessageCount}/20
+
+INSTITUCIÓN CONFIRMADA:
+${institutionContext}
+
+CONTACTO DE LA INSTITUCIÓN:
+${supportText}
+
+PASOS YA VERIFICADOS:
+${session.verifiedSteps.map((step) => `- ${step}`).join("\n") || "Sin pasos registrados todavía."}
+
+MENSAJE DEL ESTUDIANTE:
+${message}
+`,
+    },
+  ];
+}
+
+async function answerProblem({ message, history, session }) {
+  trackProblem(session, message);
+  session.attempts += 1;
+
+  const response = await openai.responses.create({
+    model: "gpt-4o-mini",
+    instructions: SYSTEM_PROMPT,
+    input: buildProblemAnswerInput({ message, history, session }),
+    temperature: 0.2,
+    max_output_tokens: 500,
+  });
+
+  return response.output_text;
+}
+
+function setPendingInstitution(session, institution, matches) {
+  session.pendingInstitutionId = institution.id;
+  session.pendingInstitutionName = institution.name;
+  session.pendingProduct = institution.product;
+  session.pendingLms = institution.lms;
+  session.pendingMatches = matches;
+}
+
+function buildInstitutionSearchResponse(session, institutionText) {
+  const institutionResult = findInstitutionInstant(institutionText);
+
+  if (
+    institutionResult.status === "probable_match" &&
+    institutionResult.matches.length === 1
+  ) {
+    const match = institutionResult.matches[0];
+
+    setPendingInstitution(session, match, institutionResult.matches);
+
+    return {
+      reply: `Encontré ${match.name}. ¿Es tu institución?`,
+      flowStep: "confirm_institution",
+      needsInstitutionConfirmation: true,
+      canContinueToProblem: false,
+      matches: institutionResult.matches,
+      session,
+    };
+  }
+
+  if (
+    institutionResult.status === "multiple_matches" &&
+    institutionResult.matches.length > 0
+  ) {
+    session.pendingMatches = institutionResult.matches;
+
+    const options = institutionResult.matches
+      .map(
+        (institution, index) =>
+          `${index + 1}. ${getInstitutionDisplay(institution)}`
+      )
+      .join("\n");
+
+    return {
+      reply: `Encontré más de una configuración. ¿Con cuál rendís?\n\n${options}`,
+      flowStep: "choose_institution_system",
+      needsInstitutionConfirmation: true,
+      canContinueToProblem: false,
+      matches: institutionResult.matches,
+      session,
+    };
+  }
+
+  return {
+    reply: "No pude identificar tu institución. ¿Podés escribir el nombre completo?",
+    flowStep: "institution_not_found",
+    needsInstitutionConfirmation: true,
+    canContinueToProblem: false,
+    matches: [],
+    session,
+  };
+}
+
 app.get("/", (req, res) => {
   res.json({
     status: "ok",
@@ -660,6 +805,7 @@ app.post("/api/chat", async (req, res) => {
     }
 
     const session = getSession(sessionId);
+    const trimmedMessage = String(message || "").trim();
 
     const today = new Date().toISOString().slice(0, 10);
 
@@ -682,7 +828,7 @@ app.post("/api/chat", async (req, res) => {
     if (fullName) session.fullName = fullName;
     if (email) session.email = email;
 
-    if (needsHumanHelp(message)) {
+    if (needsHumanHelp(trimmedMessage)) {
       return res.json({
         reply: buildHumanHelpSummary(session),
         flowStep: "human_help_requested",
@@ -693,7 +839,8 @@ app.post("/api/chat", async (req, res) => {
     if (
       session.institutionId &&
       !session.pendingInstitutionId &&
-      isProblemSolvedMessage(message)
+      isProblemSolvedMessage(trimmedMessage) &&
+      session.attempts > 0
     ) {
       return res.json({
         reply:
@@ -712,7 +859,7 @@ app.post("/api/chat", async (req, res) => {
         confirmInstitution(session, confirmed);
 
         return res.json({
-          reply: `Listo, confirmé tu institución: ${confirmed.name}. ¿Con qué necesitás ayuda?`,
+          reply: "¿En qué puedo ayudarte?",
           flowStep: "institution_confirmed",
           needsInstitutionConfirmation: false,
           canContinueToProblem: true,
@@ -721,14 +868,18 @@ app.post("/api/chat", async (req, res) => {
       }
     }
 
-    if (session.pendingInstitutionId && isAffirmative(message)) {
+    if (
+      session.pendingInstitutionId &&
+      (isAffirmative(trimmedMessage) ||
+        confirmsPendingInstitutionByName(session, trimmedMessage))
+    ) {
       const confirmed = findInstitutionById(session.pendingInstitutionId);
 
       if (confirmed) {
         confirmInstitution(session, confirmed);
 
         return res.json({
-          reply: `Listo, confirmé tu institución: ${confirmed.name}. ¿Con qué necesitás ayuda?`,
+          reply: "¿En qué puedo ayudarte?",
           flowStep: "institution_confirmed",
           needsInstitutionConfirmation: false,
           canContinueToProblem: true,
@@ -737,7 +888,7 @@ app.post("/api/chat", async (req, res) => {
       }
     }
 
-    if (session.pendingInstitutionId && isNegative(message)) {
+    if (session.pendingInstitutionId && isNegative(trimmedMessage)) {
       session.pendingInstitutionId = null;
       session.pendingInstitutionName = null;
       session.pendingProduct = null;
@@ -745,8 +896,7 @@ app.post("/api/chat", async (req, res) => {
       session.pendingMatches = [];
 
       return res.json({
-        reply:
-          "Entendido. Por favor, escribí el nombre completo de tu institución.",
+        reply: "Entendido. ¿Cuál es el nombre completo de tu institución?",
         flowStep: "institution_not_confirmed",
         needsInstitutionConfirmation: true,
         canContinueToProblem: false,
@@ -755,69 +905,8 @@ app.post("/api/chat", async (req, res) => {
       });
     }
 
-    if (!session.institutionId && institutionName) {
-      session.institutionName = institutionName;
-
-      const institutionResult = await findInstitutionWithAI(institutionName);
-
-      if (
-        institutionResult.status === "probable_match" &&
-        institutionResult.matches.length === 1
-      ) {
-        const match = institutionResult.matches[0];
-
-        session.pendingInstitutionId = match.id;
-        session.pendingInstitutionName = match.name;
-        session.pendingProduct = match.product;
-        session.pendingLms = match.lms;
-        session.pendingMatches = institutionResult.matches;
-
-        return res.json({
-          reply: `Encontré ${match.name}. ¿Es tu institución?`,
-          flowStep: "confirm_institution",
-          needsInstitutionConfirmation: true,
-          canContinueToProblem: false,
-          matches: institutionResult.matches,
-          session,
-        });
-      }
-
-      if (
-        institutionResult.status === "multiple_matches" &&
-        institutionResult.matches.length > 0
-      ) {
-        session.pendingMatches = institutionResult.matches;
-
-        const options = institutionResult.matches
-          .map(
-            (institution, index) =>
-              `${index + 1}. ${getInstitutionDisplay(institution)}`
-          )
-          .join("\n");
-
-        return res.json({
-          reply: `Encontré más de una configuración para esa institución. ¿Con cuál sistema rendís?\n\n${options}`,
-          flowStep: "choose_institution_system",
-          needsInstitutionConfirmation: true,
-          canContinueToProblem: false,
-          matches: institutionResult.matches,
-          session,
-        });
-      }
-
-      return res.json({
-        reply:
-          "No pude identificar tu institución. ¿Podés escribir el nombre completo?",
-        flowStep: "institution_not_found",
-        needsInstitutionConfirmation: true,
-        canContinueToProblem: false,
-        matches: [],
-        session,
-      });
-    }
-
     if (!session.institutionId && session.pendingMatches.length > 0) {
-      const normalizedMessage = normalizeText(message);
+      const normalizedMessage = normalizeText(trimmedMessage);
       const selectedByNumber = Number(normalizedMessage);
 
       if (
@@ -829,8 +918,10 @@ app.post("/api/chat", async (req, res) => {
         confirmInstitution(session, selected);
 
         return res.json({
-          reply: `Listo, confirmé tu institución: ${selected.name}. ¿Con qué necesitás ayuda?`,
+          reply: "¿En qué puedo ayudarte?",
           flowStep: "institution_confirmed",
+          needsInstitutionConfirmation: false,
+          canContinueToProblem: true,
           session,
         });
       }
@@ -843,14 +934,45 @@ app.post("/api/chat", async (req, res) => {
         confirmInstitution(session, selectedBySystem);
 
         return res.json({
-          reply: `Listo, confirmé tu institución: ${selectedBySystem.name}. ¿Con qué necesitás ayuda?`,
+          reply: "¿En qué puedo ayudarte?",
           flowStep: "institution_confirmed",
+          needsInstitutionConfirmation: false,
+          canContinueToProblem: true,
           session,
         });
       }
     }
 
+    /*
+      Si el frontend manda institutionName como campo separado,
+      se usa ese valor. Esto mantiene compatibilidad con tu flujo actual.
+    */
+    if (!session.institutionId && institutionName) {
+      session.institutionName = institutionName;
+
+      return res.json(buildInstitutionSearchResponse(session, institutionName));
+    }
+
+    /*
+      Flujo de datos de a uno, usando también el message.
+      Esto evita que Klaris vuelva a pedir datos que el usuario ya escribió.
+    */
     if (!session.fullName) {
+      if (
+        trimmedMessage &&
+        !looksLikeEmail(trimmedMessage) &&
+        findInstitutionInstant(trimmedMessage).matches.length === 0 &&
+        !looksLikeProblemMessage(trimmedMessage)
+      ) {
+        session.fullName = trimmedMessage;
+
+        return res.json({
+          reply: "Gracias. ¿Cuál es tu email?",
+          flowStep: "collect_email",
+          session,
+        });
+      }
+
       return res.json({
         reply: "¿Cuál es tu nombre y apellido?",
         flowStep: "collect_full_name",
@@ -859,70 +981,35 @@ app.post("/api/chat", async (req, res) => {
     }
 
     if (!session.email) {
+      if (looksLikeEmail(trimmedMessage)) {
+        session.email = trimmedMessage;
+
+        return res.json({
+          reply: "¿De qué institución sos?",
+          flowStep: "collect_institution",
+          session,
+        });
+      }
+
       return res.json({
-        reply: "Gracias. ¿Cuál es tu email?",
+        reply: "¿Cuál es tu email?",
         flowStep: "collect_email",
         session,
       });
     }
 
     if (!session.institutionId) {
-      return res.json({
-        reply: "¿De qué institución sos?",
-        flowStep: "collect_institution",
-        session,
-      });
+      return res.json(buildInstitutionSearchResponse(session, trimmedMessage));
     }
 
-    trackProblem(session, message);
-
-    const institutionContext = getInstitutionContext(session.institutionId);
-    const klarwayContext = getBasicKlarwayContext(message, session);
-    const supportText = getSupportTextForInstitution(session);
-
-    session.attempts += 1;
-
-    const response = await openai.responses.create({
-      model: "gpt-4o-mini",
-      instructions: SYSTEM_PROMPT,
-      input: [
-        ...history,
-        {
-          role: "user",
-          content: `
-DOCUMENTACIÓN OFICIAL DE KLARWAY:
-${klarwayContext}
-
-DATOS GUARDADOS DE LA SESIÓN:
-Nombre y apellido: ${session.fullName}
-Mail: ${session.email}
-Institución confirmada: ${session.institutionName}
-Institución confirmada ID: ${session.institutionId}
-Producto Klarway: ${session.product}
-Sistema/LMS: ${session.lms}
-Intentos de solución: ${session.attempts}
-Mensajes usados hoy: ${session.dailyMessageCount}/20
-
-INSTITUCIÓN CONFIRMADA:
-${institutionContext}
-
-CONTACTO DE LA INSTITUCIÓN:
-${supportText}
-
-PASOS YA VERIFICADOS:
-${session.verifiedSteps.map((step) => `- ${step}`).join("\n") || "Sin pasos registrados todavía."}
-
-MENSAJE DEL ESTUDIANTE:
-${message}
-`,
-        },
-      ],
-      temperature: 0.2,
-      max_output_tokens: 500,
+    const reply = await answerProblem({
+      message: trimmedMessage,
+      history,
+      session,
     });
 
-    res.json({
-      reply: response.output_text,
+    return res.json({
+      reply,
       flowStep: "answer_problem",
       session,
     });
